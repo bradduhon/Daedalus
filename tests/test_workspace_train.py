@@ -492,7 +492,7 @@ def test_lock_refresh_rewrites_a_stage_brief_and_its_recorded_hash(repo: Path) -
 
 @pytest.mark.parametrize(
     "body",
-    ["Contract: none\n", "no packet line\n", "Contract: a sha256=1\nContract: b sha256=2\n"],
+    ["Contract: x.md\n", "no packet line\n", "Contract: a sha256=1\nContract: b sha256=2\n"],
 )
 def test_lock_refuses_an_unparsable_brief_and_changes_nothing(repo: Path, body: str) -> None:
     # 0261: a brief without one Contract line with a sha256 is a refusal before any commit.
@@ -534,6 +534,63 @@ def test_lock_no_contract_leaves_a_skipped_brief_alone(repo: Path) -> None:
     before = brief.read_text()
     assert lock(repo, None) == [f"lock: {base}"]
     assert brief.read_text() == before
+
+
+def test_first_lock_after_a_skip_rewrites_a_contract_none_brief(repo: Path) -> None:
+    # 0261: a skip, a dispatch, then a first lock; the open brief takes the packet line.
+    train = _train(repo)
+    train_state.update(repo, train, contract_skip=True)
+    lock(repo, None)
+    _unit(repo, train, "u1")
+    brief = _brief(repo, train, "u1.md", "Contract: none")
+    path = _contract(repo)
+    lines = lock(repo, "contracts/api.md", 1)
+    assert lines[1:] == [
+        f"contract: {path} v1",
+        f"brief refreshed: {brief} contract={_sha(V1)[:12]}",
+    ]
+    assert brief.read_text().startswith(f"{_contract_line(repo)}\n")
+    assert train_state.load(repo, train)["packet_version"] == 1
+
+
+def test_a_failed_brief_write_finishes_on_the_same_lock_command(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 0261: the version records only after every brief is written, so a rerun ends the job.
+    from lib import atomic
+
+    train = _locked_train(repo)
+    briefs = []
+    for slug in ("u1", "u2", "u3"):
+        _unit(repo, train, slug)
+        briefs.append(_brief(repo, train, f"{slug}.md", _contract_line(repo)))
+    real = atomic.write_atomic
+
+    def fail_u2(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path == briefs[1]:
+            raise OSError("read-only")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(atomic, "write_atomic", fail_u2)
+    _contract(repo, text=V2)
+    with pytest.raises(WorkspaceError) as info:
+        lock(repo, "contracts/api.md", 2)
+    assert str(info.value) == (
+        f"cannot rewrite the brief {briefs[1]} (read-only). Next: make it writable, then rerun "
+        "the same lock command."
+    )
+    assert train_state.load(repo, train)["packet_version"] == 1
+    assert _subject(repo) == "Revise contract api v2"
+    new = _contract_line(repo, V2)
+    assert [b.read_text().startswith(f"{new}\n") for b in briefs] == [True, False, False]
+    monkeypatch.setattr(atomic, "write_atomic", real)
+    lines = lock(repo, "contracts/api.md", 2)
+    assert lines[1:] == [
+        "contract unchanged, no commit",
+        *(f"brief refreshed: {b} contract={_sha(V2)[:12]}" for b in briefs[1:]),
+    ]
+    assert all(b.read_text().startswith(f"{new}\n") for b in briefs)
+    assert train_state.load(repo, train)["packet_version"] == 2
 
 
 def test_stop_without_a_train_says_nothing_to_stop(repo: Path) -> None:
@@ -692,6 +749,10 @@ def _built(repo: Path, train: str, slug: str, name: str = "", text: str = "x\n")
     unit = _unit(repo, train, slug)
     (unit / (name or f"{slug}.txt")).write_text(text)
     _commit_all(unit, f"build {slug}")
+    # 0271: a coder-built unit returns a COMPLETE line naming the contract it was built on.
+    contract = train_state.load(repo, train).get("contract_path")
+    if isinstance(contract, str):
+        _completed(repo, train, slug, f"contract={_sha(Path(contract).read_text())[:12]}")
     return unit
 
 
@@ -783,6 +844,8 @@ def test_finish_after_a_revise_takes_a_unit_built_on_the_first_lock(repo: Path) 
     assert lock(repo, "contracts/api.md", 2)[0] == f"lock: {v1}"
     tip = _ok(repo, "rev-parse", f"daedalus/{train}")
     assert _git(repo, "merge-base", "--is-ancestor", tip, f"daedalus-unit/{train}-u2").returncode
+    # 0271: u2's coder answers the revise with a COMPLETE line naming v2.
+    _completed(repo, train, "u2", f"contract={_sha(V2)[:12]}")
     _verified(repo, train, u2)
     lines = finish(repo)
     assert lines[0] == f"merged 1 units into daedalus/{train}"
@@ -1721,6 +1784,71 @@ def test_finish_reads_only_the_coder_line_of_the_units_own_branch(repo: Path) ->
     _completed(repo, train, "u2", "contract=000000000000")
     line = f"[STATUS: COMPLETE] branch=daedalus-unit/{train}-u1 packet_version=1 files=x "
     _verifier_stop(repo, f"{line}tests=0 ledger_notes=none contract=000000000000\n", None)
+    assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
+
+
+def _bare_unit(repo: Path, train: str, slug: str) -> Path:
+    # 0271: a unit committed with no coder COMPLETE line in any log.
+    unit = _unit(repo, train, slug)
+    (unit / f"{slug}.txt").write_text("x\n")
+    _commit_all(unit, f"build {slug}")
+    return unit
+
+
+def _no_line_message(repo: Path, train: str, slug: str) -> str:
+    return (
+        f"unit {slug} has no coder COMPLETE line for branch daedalus-unit/{train}-{slug} in "
+        f"this session's audit log, so its contract cannot be compared with {_sha(V1)[:12]}. "
+        "Next: resume the unit's coder with its brief's Contract line for a new COMPLETE "
+        "line, then rerun the merge."
+    )
+
+
+def test_finish_refuses_a_coder_unit_with_no_complete_line(repo: Path) -> None:
+    # 0271: a missing line is a refusal with a Next line, never a pass.
+    train = _locked_train(repo)
+    unit = _bare_unit(repo, train, "u1")
+    _verified(repo, train, unit)
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert str(info.value) == _no_line_message(repo, train, "u1")
+    assert unit.exists() and _merges(repo, f"daedalus/{train}") == []
+
+
+def test_a_resumed_run_refuses_a_unit_whose_line_is_in_an_earlier_session(repo: Path) -> None:
+    # 0271: the gate reads the audit session's log only, as the verdict gate does.
+    from lib import audit
+
+    train = _locked_train(repo)
+    unit = _built(repo, train, "u1")
+    later = "sess-resumed"
+    train_state.update(repo, train, audit_session=later)
+    text = f"Check every claim.\nUnit worktree: {unit}\nReply with the verdict line."
+    for fields in (
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_input": {"subagent_type": "daedalus:verifier", "prompt": text},
+            "tool_use_id": "toolu_resumed",
+        },
+        {
+            "hook_event_name": "SubagentStop",
+            "agent_id": "agent-verifier",
+            "agent_type": "daedalus:verifier",
+            "last_assistant_message": keyed(VERIFIED_REPLY, unit),
+        },
+    ):
+        audit.audit_append({"session_id": later, "cwd": str(repo), **fields})
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert str(info.value) == _no_line_message(repo, train, "u1")
+
+
+def test_finish_passes_the_docs_unit_by_its_recorded_name(repo: Path) -> None:
+    # 0271, 0134: the <train-id>-docstage unit has no coder, so no line is asked of it.
+    train = _locked_train(repo)
+    docs = _bare_unit(repo, train, "docstage")
+    _verified(repo, train, docs)
     assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
 
 

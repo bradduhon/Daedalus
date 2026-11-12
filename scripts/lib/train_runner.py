@@ -82,12 +82,12 @@ from lib.train_definition import (
     DefinitionError,
     Origin,
 )
-from lib.train_summary import _COMPLETE as _COMPLETE_STATUS
 from lib.train_summary import (
     LEDGER,
     LEDGER_PENDING,
     NOTE_SECTIONS,
     SummaryError,
+    complete_branch,
     first_session,
     notes_path,
     parse_notes,
@@ -1012,21 +1012,23 @@ def _completion_value(line: str, name: str) -> str | None:
 def completion_contract_refusal(
     contract: str, records: list[dict[str, object]], branch: str, uid: str
 ) -> str | None:
-    # 0271: the newest coder COMPLETE line for the branch carries the contract's current hash.
+    # 0271: the newest coder COMPLETE line for the branch carries the contract's current hash;
+    # no line in the session's log is a refusal, never a pass.
     done = [
         reply.last
         for reply in agent_replies(records)
-        if reply.agent == "coder"
-        and reply.last.startswith(COMPLETE_LINE)
-        and (match := _COMPLETE_STATUS.search(reply.last)) is not None
-        and match.group(1) == branch
+        if reply.agent == "coder" and complete_branch(reply.last) == branch
     ]
-    if not done:
-        return None
     try:
         current = _sha256(_read_packet(Path(contract), "Locked Contract Packet"))[:12]
     except RunnerError as exc:
         return str(exc)
+    if not done:
+        return (
+            f"unit {uid} has no coder COMPLETE line for branch {branch} in this session's audit "
+            f"log, so its contract cannot be compared with {current}. Next: resume the unit's "
+            "coder with its brief's Contract line for a new COMPLETE line, then rerun the merge."
+        )
     got = _completion_value(done[-1], "contract")
     if got is not None and hmac.compare_digest(got, current):
         return None
@@ -1689,6 +1691,9 @@ def _contract_packet_line(contract: str) -> str:
 
 
 def _is_contract_line(line: str) -> bool:
+    # 0261: a packet line, or the skip line a later first lock replaces.
+    if line == f"{CONTRACT_PREFIX}none":
+        return True
     head, sep, digest = line.rpartition(" sha256=")
     hex_ok = len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)
     return bool(sep) and head.startswith(CONTRACT_PREFIX) and hex_ok
@@ -1737,7 +1742,8 @@ def contract_refresh(
         if len(at) != 1 or not _is_contract_line(rows[at[0]].rstrip("\r\n")):
             raise RunnerError(
                 f"the brief {brief} holds {len(at)} Contract lines, and it needs exactly one "
-                f"`Contract: <path> sha256=<hex>` line. Next: put back the one Contract line "
+                f"`Contract: <path> sha256=<hex>` or `Contract: none` line. Next: put back the "
+                "one Contract line "
                 f"the dispatch wrote, {rerun}."
             )
         old = rows[at[0]]
@@ -1752,15 +1758,26 @@ def write_refresh(
     repo: Path, train_id: str, digest: str, pending: list[tuple[Path, str]]
 ) -> list[str]:
     # 0261: one line per rewritten brief, one line when none; a stage brief's hash follows it.
-    for brief, text in pending:
-        try:
-            atomic.write_atomic(brief, text)
-        except OSError as exc:
-            raise RunnerError(
-                f"cannot rewrite the brief {brief} ({exc}). Next: make it writable, then set "
-                f"its Contract line to sha256={digest} by hand."
-            ) from exc
-    written = {str(brief) for brief, _ in pending}
+    written: set[str] = set()
+    try:
+        for brief, text in pending:
+            try:
+                atomic.write_atomic(brief, text)
+            except OSError as exc:
+                raise RunnerError(
+                    f"cannot rewrite the brief {brief} ({exc}). Next: make it writable, then "
+                    "rerun the same lock command."
+                ) from exc
+            written.add(str(brief))
+    finally:
+        _follow_dispatches(repo, train_id, digest, written)
+    if not pending:
+        return [f"briefs refreshed: none hold an older contract than {digest[:12]}"]
+    return [f"brief refreshed: {brief} contract={digest[:12]}" for brief, _ in pending]
+
+
+def _follow_dispatches(repo: Path, train_id: str, digest: str, written: set[str]) -> None:
+    # 0261: a rewritten stage brief's dispatch hash follows it, before any write refusal.
 
     def edit(state: dict[str, object]) -> None:
         items = _objects(state, "dispatches")
@@ -1775,9 +1792,6 @@ def write_refresh(
             train_state.change(repo, train_id, edit)
         except train_state.TrainStateError as exc:
             raise RunnerError(str(exc)) from exc
-    if not pending:
-        return [f"briefs refreshed: none hold an older contract than {digest[:12]}"]
-    return [f"brief refreshed: {brief} contract={digest[:12]}" for brief, _ in pending]
 
 
 def _brief_packets(repo: Path, train_id: str, state: dict[str, object]) -> tuple[list[str], Path]:

@@ -737,10 +737,9 @@ def lock(repo: Path, contract: str | None, version: int | None = None) -> list[s
         )
     if not path.is_file():
         raise WorkspaceError(f"contract-spec did not save the packet at {path}. Next: {RERUN}")
-    # 0261: a revise reads every open brief before it commits, so a refusal changes nothing.
-    refresh = (
-        _brief_refresh(repo, train_id, state, str(path)) if isinstance(recorded, int) else None
-    )
+    # 0261: a revise, or a first lock after a skip, reads every open brief before it commits.
+    later = isinstance(recorded, int) or state.get(train_state.CONTRACT_SKIP) is True
+    refresh = _brief_refresh(repo, train_id, state, str(path)) if later else None
     _on_branch(repo, integration, str(state["base_sha"]))
     if root != repo:
         _on_branch(root, integration)
@@ -757,6 +756,20 @@ def lock(repo: Path, contract: str | None, version: int | None = None) -> list[s
     # 0150, issue 96: a revise keeps the lock at the train base, never the integration tip.
     kept = state.get("lock_sha") if isinstance(recorded, int) else None
     sha = kept if isinstance(kept, str) and kept else _out(repo, "rev-parse", integration).strip()
+    detail = (
+        f"contract: {path} v{version}"
+        if unchanged.returncode == 1
+        else "contract unchanged, no commit"
+    )
+    lines = [f"lock: {sha}", detail]
+    if refresh is not None:
+        from lib import train_runner  # 0261: the brief writer owns the Contract line format.
+
+        # 0261: the version records only after every brief is written, so a rerun finishes them.
+        try:
+            lines += train_runner.write_refresh(repo, train_id, *refresh)
+        except train_runner.RunnerError as exc:
+            raise WorkspaceError(str(exc)) from exc
     _record(
         repo,
         train_id,
@@ -765,19 +778,7 @@ def lock(repo: Path, contract: str | None, version: int | None = None) -> list[s
         packet_version=version,
         lock_sha=sha,
     )
-    detail = (
-        f"contract: {path} v{version}"
-        if unchanged.returncode == 1
-        else "contract unchanged, no commit"
-    )
-    if refresh is None:
-        return [f"lock: {sha}", detail]
-    from lib import train_runner  # 0261: the brief writer owns the Contract line format.
-
-    try:
-        return [f"lock: {sha}", detail, *train_runner.write_refresh(repo, train_id, *refresh)]
-    except train_runner.RunnerError as exc:
-        raise WorkspaceError(str(exc)) from exc
+    return lines
 
 
 def _brief_refresh(
@@ -1023,7 +1024,7 @@ def finish(repo: Path) -> list[str]:
     records = _audit_records(repo, state) if pending else []
     for unit in pending:
         require_verified(repo, train_id, records, unit, _unit_label(train_id, str(unit["name"])))
-        require_contract(state, records, unit, _unit_label(train_id, str(unit["name"])))
+        require_contract(train_id, state, records, unit, _unit_label(train_id, str(unit["name"])))
     _git(repo, "switch", "-q", integration)
     lines = _merge_all(repo, state, train_id, merging)
     _finished(repo, train_id, merging)
@@ -1335,7 +1336,7 @@ def _wave(
             )
         records = _audit_records(repo, state) if records is None else records
         require_verified(repo, train_id, records, unit, uid)
-        require_contract(state, records, unit, uid)
+        require_contract(train_id, state, records, unit, uid)
         wave.append(unit)
     return wave
 
@@ -1359,11 +1360,21 @@ def require_verified(
 
 
 def require_contract(
-    state: dict[str, object], records: list[dict[str, object]], unit: dict[str, object], uid: str
+    train_id: str,
+    state: dict[str, object],
+    records: list[dict[str, object]],
+    unit: dict[str, object],
+    uid: str,
 ) -> None:
     # 0271: a locked contract only; a skipped one keeps the _skip_scope rule.
     contract = state.get("contract_path")
     if not isinstance(contract, str) or not contract:
+        return
+    # 0271, 0134: by recorded name or flag, the docs and audit units have no coder to compare.
+    if (
+        train_state.is_audit_unit(unit)
+        or unit.get("name") == f"{train_id}{train_state.DOCS_SUFFIX}"
+    ):
         return
     from lib import train_runner  # 0271: train_runner imports this module, so it loads here.
 

@@ -296,6 +296,12 @@ def _agent(record: Record) -> str:
     return normalize_agent(raw) if isinstance(raw, str) else ""
 
 
+def complete_branch(line: str) -> str | None:
+    # 0271: the branch= value of a line that opens with a COMPLETE status, else None.
+    done = _COMPLETE.match(line)
+    return done.group(1) if done else None
+
+
 def replies(records: Sequence[Record]) -> list[Reply]:
     # issue 57: a reply is a hand-back call or a stop's tail; a stop relaying the same line is one.
     # 124: only the stop right after the same agent's hand-back is a relay; a later turn counts.
