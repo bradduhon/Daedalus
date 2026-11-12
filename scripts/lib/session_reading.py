@@ -458,7 +458,7 @@ class _Reader:
         for pos, part in enumerate(word.parts):
             if isinstance(part, Literal):
                 out.append(part.text)
-            elif isinstance(part, Tilde) and pos == 0:
+            elif isinstance(part, Tilde) and (pos == 0 or "".join(out).endswith(("=", ":"))):
                 out.append(os.path.expanduser("~" + part.user) if part.user else _home())
             elif isinstance(part, Param) and part.op == "" and self.param(part.name):
                 out.append(self.param(part.name))
