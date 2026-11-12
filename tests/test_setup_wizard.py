@@ -31,6 +31,7 @@ from lib.project_keys import (
     reference_keys,
     starter_operator,
 )
+from lib.work_classes import DEFAULT_CLASSES, DEFAULT_MODELS
 
 from tests.conftest import REPO_ROOT, SCRIPTS_DIR
 
@@ -558,6 +559,9 @@ def test_each_example_loads_through_its_own_reader(tmp_path: Path) -> None:
         "guidance_source": "claude",
         "self_assessment": False,
         "developer_profile": False,
+        # 0270: the example writes out the shipped classes and mapping.
+        "work_classes": DEFAULT_CLASSES,
+        "class_models": DEFAULT_MODELS,
     }
 
 

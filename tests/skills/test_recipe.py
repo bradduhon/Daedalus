@@ -510,7 +510,11 @@ def test_build_train_records_choices_plan_packets_and_controls() -> None:
         assert line in phase2, line
     complete = _phase_row("build", "STATUS: COMPLETE]")
     assert "contract=<12 hex> standards=<12 hex>`" in complete
-    assert "Compare its `contract=` and `standards=` values" in _phase_step("build", 7)
+    assert "Compare its `standards=` value" in _phase_step("build", 7)
+    # 0271: the merge script compares contract= itself; no step asks for it by hand.
+    assert "compares its `contract=` value with the contract's current hash itself" in (
+        " ".join(_phase_step("build", 7).split())
+    )
     phase3 = " ".join(phase_text("audit").split())
     controls = PLUGIN + "audit_report.py --repo <repo> --session <id> --controls`"
     assert controls in phase3

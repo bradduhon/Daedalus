@@ -25,7 +25,7 @@ from lib.ledger import LedgerError  # noqa: E402
 from lib.manifest import MANIFEST_NAME, ManifestError  # noqa: E402
 from lib.manifest import parse as parse_manifest  # noqa: E402
 from lib.operator_file import MAX_BYTES as OPERATOR_MAX_BYTES  # noqa: E402
-from lib.operator_file import OPERATOR_FILE, OperatorError  # noqa: E402
+from lib.operator_file import OPERATOR_FILE, OperatorError, check_override, load_user  # noqa: E402
 from lib.operator_file import validate as validate_operator  # noqa: E402
 from lib.project_keys import (  # noqa: E402
     BLOCKS,
@@ -389,6 +389,9 @@ def set_key(form: str, key: str, raw: str, repo: Path) -> int:
         ) from exc
     try:
         _check(form, changed, path)
+        if form == "config":
+            # 0280: the same cross-file check operator_file.load runs, before the write.
+            check_override(load_user(), parse_config(changed, path).operator)
     except (ManifestError, ConfigError, OperatorError, LedgerError) as exc:
         # 0242: the reader's own message, with a next step when the reader gave none.
         tail = "" if "Next:" in str(exc) else f" {VALUE_NEXT}"

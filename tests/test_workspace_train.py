@@ -294,7 +294,12 @@ def test_lock_skips_an_unchanged_contract(repo: Path) -> None:
     _contract(repo)
     first = lock(repo, "contracts/api.md", 1)
     again = lock(repo, "contracts/api.md", 2)
-    assert again == [first[0], "contract unchanged, no commit"]
+    digest = hashlib.sha256(b"packet v1\n").hexdigest()[:12]
+    assert again == [
+        first[0],
+        "contract unchanged, no commit",
+        f"briefs refreshed: none hold an older contract than {digest}",
+    ]
     assert train_state.load(repo, train)["packet_version"] == 2
 
 
@@ -414,6 +419,178 @@ def _locked_train(repo: Path) -> str:
 
 def _unit(repo: Path, train: str, slug: str) -> Path:
     return create(repo, f"{train}-{slug}", f"daedalus/{train}")
+
+
+V1, V2 = "packet v1\n", "packet v2\n"
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _brief(repo: Path, train: str, name: str, contract_line: str) -> Path:
+    # 0261: the dispatch brief shape, packet lines first, then the unit's own text.
+    path = train_runner._scratch(repo, train) / "briefs" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{contract_line}\nStandards: s.md sha256={_sha('s')}\n\nWork here.\n")
+    return path
+
+
+def _contract_line(repo: Path, text: str = "packet v1\n") -> str:
+    return f"Contract: {repo / 'contracts' / 'api.md'} sha256={_sha(text)}"
+
+
+def test_lock_revise_rewrites_open_briefs_and_leaves_merged_ones(repo: Path) -> None:
+    # 0261: a revise rewrites each open unit's Contract line; a finished unit's brief stays.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    _unit(repo, train, "u2")
+    old = _contract_line(repo)
+    open_brief, merged_brief = _brief(repo, train, "u1.md", old), _brief(repo, train, "u2.md", old)
+    assert unit_binding.mark_finished(repo, train, f"{train}-u2") is None
+    _contract(repo, text="packet v2\n")
+    lines = lock(repo, "contracts/api.md", 2)
+    new = _contract_line(repo, V2)
+    assert lines[2:] == [f"brief refreshed: {open_brief} contract={_sha(V2)[:12]}"]
+    assert open_brief.read_text() == merged_brief.read_text().replace(old, new)
+    assert merged_brief.read_text().startswith(f"{old}\n")
+
+
+def test_lock_refresh_twice_rewrites_nothing_the_second_time(repo: Path) -> None:
+    # 0261: a second revise over the same packet bytes finds every open brief current.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    brief = _brief(repo, train, "u1.md", _contract_line(repo))
+    _contract(repo, text="packet v2\n")
+    assert lock(repo, "contracts/api.md", 2)[2].startswith(f"brief refreshed: {brief}")
+    after = brief.read_text()
+    again = lock(repo, "contracts/api.md", 3)
+    digest = _sha(V2)[:12]
+    assert again[1:] == [
+        "contract unchanged, no commit",
+        f"briefs refreshed: none hold an older contract than {digest}",
+    ]
+    assert brief.read_text() == after
+
+
+def test_lock_refresh_rewrites_a_stage_brief_and_its_recorded_hash(repo: Path) -> None:
+    # 0261: a runner stage brief follows the contract, and its dispatch hash follows the brief.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    brief = _brief(repo, train, "build-1.md", _contract_line(repo))
+    item = {"stage": "build", "n": 1, "unit": f"{train}-u1", "brief": str(brief)}
+    other = {"stage": "plan", "n": 1, "unit": None, "brief": "elsewhere.md"}
+    train_state.update(
+        repo, train, dispatches=[{**item, "contract_sha256": _sha("packet v1\n")}, other]
+    )
+    _contract(repo, text="packet v2\n")
+    assert lock(repo, "contracts/api.md", 2)[2].startswith(f"brief refreshed: {brief}")
+    assert brief.read_text().startswith(f"{_contract_line(repo, V2)}\n")
+    dispatches = train_state.load(repo, train)["dispatches"]
+    assert dispatches == [{**item, "contract_sha256": _sha(V2)}, other]
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["Contract: x.md\n", "no packet line\n", "Contract: a sha256=1\nContract: b sha256=2\n"],
+)
+def test_lock_refuses_an_unparsable_brief_and_changes_nothing(repo: Path, body: str) -> None:
+    # 0261: a brief without one Contract line with a sha256 is a refusal before any commit.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    brief = train_runner._scratch(repo, train) / "briefs" / "u1.md"
+    brief.parent.mkdir(parents=True, exist_ok=True)
+    brief.write_text(body)
+    _contract(repo, text="packet v2\n")
+    with pytest.raises(WorkspaceError) as info:
+        lock(repo, "contracts/api.md", 2)
+    assert f"the brief {brief} holds" in str(info.value) and "Next: put back" in str(info.value)
+    assert train_state.load(repo, train)["packet_version"] == 1
+    assert _subject(repo) == "Lock contract api v1" and brief.read_text() == body
+
+
+def test_lock_refuses_an_unreadable_brief(repo: Path) -> None:
+    # 0261: a brief that is not a readable regular file is a refusal, never a silent skip.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    brief = train_runner._scratch(repo, train) / "briefs" / "u1.md"
+    brief.mkdir(parents=True)
+    _contract(repo, text="packet v2\n")
+    with pytest.raises(WorkspaceError) as info:
+        lock(repo, "contracts/api.md", 2)
+    assert f"the brief {brief} could not be read" in str(info.value)
+    assert "Next: restore it" in str(info.value)
+    assert train_state.load(repo, train)["packet_version"] == 1
+
+
+def test_lock_no_contract_leaves_a_skipped_brief_alone(repo: Path) -> None:
+    # 0261, 0156: a skipped contract records no version, so no brief is refreshed.
+    train = _train(repo)
+    base = _ok(repo, "rev-parse", "HEAD")
+    train_state.update(repo, train, contract_skip=True)
+    assert lock(repo, None) == [f"lock: {base}"]
+    _unit(repo, train, "u1")
+    brief = _brief(repo, train, "u1.md", "Contract: none")
+    before = brief.read_text()
+    assert lock(repo, None) == [f"lock: {base}"]
+    assert brief.read_text() == before
+
+
+def test_first_lock_after_a_skip_rewrites_a_contract_none_brief(repo: Path) -> None:
+    # 0261: a skip, a dispatch, then a first lock; the open brief takes the packet line.
+    train = _train(repo)
+    train_state.update(repo, train, contract_skip=True)
+    lock(repo, None)
+    _unit(repo, train, "u1")
+    brief = _brief(repo, train, "u1.md", "Contract: none")
+    path = _contract(repo)
+    lines = lock(repo, "contracts/api.md", 1)
+    assert lines[1:] == [
+        f"contract: {path} v1",
+        f"brief refreshed: {brief} contract={_sha(V1)[:12]}",
+    ]
+    assert brief.read_text().startswith(f"{_contract_line(repo)}\n")
+    assert train_state.load(repo, train)["packet_version"] == 1
+
+
+def test_a_failed_brief_write_finishes_on_the_same_lock_command(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 0261: the version records only after every brief is written, so a rerun ends the job.
+    from lib import atomic
+
+    train = _locked_train(repo)
+    briefs = []
+    for slug in ("u1", "u2", "u3"):
+        _unit(repo, train, slug)
+        briefs.append(_brief(repo, train, f"{slug}.md", _contract_line(repo)))
+    real = atomic.write_atomic
+
+    def fail_u2(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path == briefs[1]:
+            raise OSError("read-only")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(atomic, "write_atomic", fail_u2)
+    _contract(repo, text=V2)
+    with pytest.raises(WorkspaceError) as info:
+        lock(repo, "contracts/api.md", 2)
+    assert str(info.value) == (
+        f"cannot rewrite the brief {briefs[1]} (read-only). Next: make it writable, then rerun "
+        "the same lock command."
+    )
+    assert train_state.load(repo, train)["packet_version"] == 1
+    assert _subject(repo) == "Revise contract api v2"
+    new = _contract_line(repo, V2)
+    assert [b.read_text().startswith(f"{new}\n") for b in briefs] == [True, False, False]
+    monkeypatch.setattr(atomic, "write_atomic", real)
+    lines = lock(repo, "contracts/api.md", 2)
+    assert lines[1:] == [
+        "contract unchanged, no commit",
+        *(f"brief refreshed: {b} contract={_sha(V2)[:12]}" for b in briefs[1:]),
+    ]
+    assert all(b.read_text().startswith(f"{new}\n") for b in briefs)
+    assert train_state.load(repo, train)["packet_version"] == 2
 
 
 def test_stop_without_a_train_says_nothing_to_stop(repo: Path) -> None:
@@ -572,6 +749,10 @@ def _built(repo: Path, train: str, slug: str, name: str = "", text: str = "x\n")
     unit = _unit(repo, train, slug)
     (unit / (name or f"{slug}.txt")).write_text(text)
     _commit_all(unit, f"build {slug}")
+    # 0271: a coder-built unit returns a COMPLETE line naming the contract it was built on.
+    contract = train_state.load(repo, train).get("contract_path")
+    if isinstance(contract, str):
+        _completed(repo, train, slug, f"contract={_sha(Path(contract).read_text())[:12]}")
     return unit
 
 
@@ -663,6 +844,8 @@ def test_finish_after_a_revise_takes_a_unit_built_on_the_first_lock(repo: Path) 
     assert lock(repo, "contracts/api.md", 2)[0] == f"lock: {v1}"
     tip = _ok(repo, "rev-parse", f"daedalus/{train}")
     assert _git(repo, "merge-base", "--is-ancestor", tip, f"daedalus-unit/{train}-u2").returncode
+    # 0271: u2's coder answers the revise with a COMPLETE line naming v2.
+    _completed(repo, train, "u2", f"contract={_sha(V2)[:12]}")
     _verified(repo, train, u2)
     lines = finish(repo)
     assert lines[0] == f"merged 1 units into daedalus/{train}"
@@ -1538,6 +1721,135 @@ def test_finish_merges_a_skipped_train_writing_only_its_one_file(repo: Path) -> 
     _verified(repo, train, _built(repo, train, "u1"))
     assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
     assert (repo / "u1.txt").is_file()
+
+
+def _completed(repo: Path, train: str, slug: str, contract: str) -> None:
+    # 0271: the coder's COMPLETE line, as the audit log holds its stop tail.
+    line = (
+        f"[STATUS: COMPLETE] branch=daedalus-unit/{train}-{slug} packet_version=1 "
+        f"files=u1.txt tests=1 passed ledger_notes=none {contract} standards={_sha('s')[:12]}"
+    )
+    _verifier_stop(repo, f"done\n{line}\n", None, "daedalus:coder", f"agent-coder-{slug}")
+
+
+def test_finish_of_a_skipped_train_takes_a_contract_none_line(repo: Path) -> None:
+    # 0271: a skipped contract keeps its own rule; the merge compares no fingerprint.
+    train = _skipped_train(repo)
+    unit = _built(repo, train, "u1")
+    _verified(repo, train, unit)
+    _completed(repo, train, "u1", "contract=none")
+    assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
+
+
+def test_merge_refuses_a_unit_completed_against_an_older_contract(repo: Path) -> None:
+    # 0271: the merge compares the COMPLETE line's contract with the contract's current hash.
+    train, u1, _ = _wave_train(repo)
+    _completed(repo, train, "u1", f"contract={_sha(V1)[:12]}")
+    _contract(repo, text=V2)
+    lock(repo, "contracts/api.md", 2)
+    _dispatch(repo, u1)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
+    with pytest.raises(WorkspaceError) as info:
+        workspace.merge(repo, ["U1"])
+    assert str(info.value) == (
+        f"unit U1 completed against contract={_sha(V1)[:12]}, and the contract "
+        f"{repo / 'contracts' / 'api.md'} is now at {_sha(V2)[:12]}. Next: resume the unit's "
+        "coder with its brief's Contract line, have it rebuild against that contract and "
+        "return a new COMPLETE line, then rerun the merge."
+    )
+    assert u1.exists() and _merges(repo, f"daedalus/{train}") == []
+    _completed(repo, train, "u1", f"contract={_sha(V2)[:12]}")
+    assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
+
+
+def test_finish_refuses_a_complete_line_with_no_contract_field(repo: Path) -> None:
+    # 0271: a locked contract with contract=none or no field on the line is a mismatch.
+    train = _locked_train(repo)
+    unit = _built(repo, train, "u1")
+    _verified(repo, train, unit)
+    _completed(repo, train, "u1", "contract=none")
+    with pytest.raises(WorkspaceError, match="completed against contract=missing") as info:
+        finish(repo)
+    assert "Next: resume the unit's coder" in str(info.value)
+    assert unit.exists() and _merges(repo, f"daedalus/{train}") == []
+
+
+def test_finish_reads_only_the_coder_line_of_the_units_own_branch(repo: Path) -> None:
+    # 0271: another unit's line and a non-coder's line never stand in for this unit's line.
+    train = _locked_train(repo)
+    current = f"contract={_sha(V1)[:12]}"
+    unit = _built(repo, train, "u1")
+    _verified(repo, train, unit)
+    _completed(repo, train, "u1", current)
+    _completed(repo, train, "u2", "contract=000000000000")
+    line = f"[STATUS: COMPLETE] branch=daedalus-unit/{train}-u1 packet_version=1 files=x "
+    _verifier_stop(repo, f"{line}tests=0 ledger_notes=none contract=000000000000\n", None)
+    assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
+
+
+def _bare_unit(repo: Path, train: str, slug: str) -> Path:
+    # 0271: a unit committed with no coder COMPLETE line in any log.
+    unit = _unit(repo, train, slug)
+    (unit / f"{slug}.txt").write_text("x\n")
+    _commit_all(unit, f"build {slug}")
+    return unit
+
+
+def _no_line_message(repo: Path, train: str, slug: str) -> str:
+    return (
+        f"unit {slug} has no coder COMPLETE line for branch daedalus-unit/{train}-{slug} in "
+        f"this session's audit log, so its contract cannot be compared with {_sha(V1)[:12]}. "
+        "Next: resume the unit's coder with its brief's Contract line for a new COMPLETE "
+        "line, then rerun the merge."
+    )
+
+
+def test_finish_refuses_a_coder_unit_with_no_complete_line(repo: Path) -> None:
+    # 0271: a missing line is a refusal with a Next line, never a pass.
+    train = _locked_train(repo)
+    unit = _bare_unit(repo, train, "u1")
+    _verified(repo, train, unit)
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert str(info.value) == _no_line_message(repo, train, "u1")
+    assert unit.exists() and _merges(repo, f"daedalus/{train}") == []
+
+
+def test_a_resumed_run_refuses_a_unit_whose_line_is_in_an_earlier_session(repo: Path) -> None:
+    # 0271: the gate reads the audit session's log only, as the verdict gate does.
+    from lib import audit
+
+    train = _locked_train(repo)
+    unit = _built(repo, train, "u1")
+    later = "sess-resumed"
+    train_state.update(repo, train, audit_session=later)
+    text = f"Check every claim.\nUnit worktree: {unit}\nReply with the verdict line."
+    for fields in (
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_input": {"subagent_type": "daedalus:verifier", "prompt": text},
+            "tool_use_id": "toolu_resumed",
+        },
+        {
+            "hook_event_name": "SubagentStop",
+            "agent_id": "agent-verifier",
+            "agent_type": "daedalus:verifier",
+            "last_assistant_message": keyed(VERIFIED_REPLY, unit),
+        },
+    ):
+        audit.audit_append({"session_id": later, "cwd": str(repo), **fields})
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert str(info.value) == _no_line_message(repo, train, "u1")
+
+
+def test_finish_passes_the_docs_unit_by_its_recorded_name(repo: Path) -> None:
+    # 0271, 0134: the <train-id>-docstage unit has no coder, so no line is asked of it.
+    train = _locked_train(repo)
+    docs = _bare_unit(repo, train, "docstage")
+    _verified(repo, train, docs)
+    assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
 
 
 @pytest.mark.parametrize(
