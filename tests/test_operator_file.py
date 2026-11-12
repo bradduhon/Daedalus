@@ -264,6 +264,8 @@ def test_only_the_named_modules_mention_operator_file() -> None:
     # A1: the flag reader loads the file through load().
     allowed.add("self_assessment.py")
     allowed.add("developer_profile.py")
+    # 0270: the class lookup takes an Operator, typed only; no caller acts on it yet.
+    allowed.add("work_classes.py")
     found = {
         path.name
         for path in (REPO_ROOT / "scripts").rglob("*.py")

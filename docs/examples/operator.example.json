@@ -6,5 +6,89 @@
   "guidance_source": "claude",
   "script_language": null,
   "self_assessment": false,
-  "developer_profile": false
+  "developer_profile": false,
+  "work_classes": [
+    {
+      "name": "AuthN",
+      "definition": "The work builds or changes how a caller's identity is proven: login, sessions, MFA, SSO, OIDC or SAML flows."
+    },
+    {
+      "name": "AuthZ",
+      "definition": "The work builds or changes what a caller may do: permission checks, role or attribute rules, policy evaluation, tenant isolation."
+    },
+    {
+      "name": "Identity",
+      "definition": "The work builds or changes the record of who a principal is: user and service accounts, identity providers and federation, how identities are created, linked or removed."
+    },
+    {
+      "name": "Access grants and escalation",
+      "definition": "The work builds or changes who holds access: IAM policies, roles, trust policies, role assumption, admin elevation, sharing and ACL changes."
+    },
+    {
+      "name": "Cryptography",
+      "definition": "The work builds or changes signing, verifying, hashing for security, key derivation, secure randomness, certificate validation, TLS settings."
+    },
+    {
+      "name": "Encryption",
+      "definition": "The work builds or changes encrypting or decrypting data at rest or in transit: key choice, key service use, envelope encryption."
+    },
+    {
+      "name": "Secrets",
+      "definition": "The work builds or changes creating, storing, rotating, reading or sending a secret; the secret store itself."
+    },
+    {
+      "name": "Tokens",
+      "definition": "The work builds or changes issuing, signing, validating, refreshing or revoking a token."
+    },
+    {
+      "name": "API keys",
+      "definition": "The work builds or changes issuing, storing, validating, scoping or rotating an API key."
+    },
+    {
+      "name": "Credentials",
+      "definition": "The work builds or changes storing, comparing or resetting credentials; credential files."
+    },
+    {
+      "name": "Untrusted input",
+      "definition": "The work builds or changes the first parse or check of input from outside the system."
+    },
+    {
+      "name": "Network exposure",
+      "definition": "The work builds or changes what is reachable and from where: firewall rules, security groups, public endpoints, CORS."
+    },
+    {
+      "name": "Audit trail",
+      "definition": "The work builds or changes the security log itself and what keeps it tamper-evident."
+    },
+    {
+      "name": "Security rules",
+      "definition": "The work builds or changes the rules a security scanner or guard enforces, the scanner's configuration, and any exception to or skip of a rule."
+    },
+    {
+      "name": "Ordinary work",
+      "definition": "The work builds or changes none of the things another class names."
+    },
+    {
+      "name": "Mechanical work",
+      "definition": "The work needs no judgement: a rename, a move, a copy or a format pass."
+    }
+  ],
+  "class_models": {
+    "AuthN": "opus",
+    "AuthZ": "opus",
+    "Identity": "opus",
+    "Access grants and escalation": "opus",
+    "Cryptography": "opus",
+    "Encryption": "opus",
+    "Secrets": "opus",
+    "Tokens": "opus",
+    "API keys": "opus",
+    "Credentials": "opus",
+    "Untrusted input": "opus",
+    "Network exposure": "opus",
+    "Audit trail": "opus",
+    "Security rules": "opus",
+    "Ordinary work": "sonnet",
+    "Mechanical work": "haiku"
+  }
 }

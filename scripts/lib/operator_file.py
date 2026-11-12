@@ -14,6 +14,13 @@ from pathlib import Path
 from lib.manifest import LITERACY_LEVELS, LITERACY_PROFILE, _literacy_ok
 from lib.settings_maps import SCHEMA_KEY, current, number_problem
 from lib.user_keys import USER_KEY_CLAUSE, unknown_keys
+from lib.work_classes import (
+    DEFAULT_CLASSES,
+    DEFAULT_MODELS,
+    parse_classes,
+    parse_models,
+    unlisted,
+)
 
 OPERATOR_FILE = Path(".claude") / "daedalus" / "operator.json"
 MAX_BYTES = 64 * 1024
@@ -36,6 +43,8 @@ TOP_KEYS = (
     "script_language",
     "self_assessment",
     "developer_profile",
+    "work_classes",
+    "class_models",
 )
 # 0244: where the guidance layer is read from; claude is the default.
 GUIDANCE_SOURCES = ("claude", "daedalus")
@@ -56,6 +65,9 @@ class Operator:
     script_language: str | None = None
     self_assessment: bool = False
     developer_profile: bool = False
+    # 0270: absent reads as the shipped defaults; an empty list means no classes.
+    work_classes: tuple[tuple[str, str], ...] = DEFAULT_CLASSES
+    class_models: tuple[tuple[str, str], ...] = DEFAULT_MODELS
 
 
 OPERATOR_KEYS = tuple(f.name for f in fields(Operator))
@@ -149,6 +161,37 @@ def validate(raw: object, where: str, prefix: str = "") -> dict[str, object]:
     if raw.get("hard_stops") is not None:
         out["main_refusals"] = _refusals(raw["hard_stops"], where, f"{prefix}hard_stops")
     out.update(_choices(raw, where, prefix))
+    out.update(_classes(raw, where, prefix))
+    return out
+
+
+def _unlisted_error(where: str, key: str, names: list[str]) -> OperatorError:
+    return OperatorError(
+        f"{where} {key} maps {names!r}, which the classes list does not hold. Next: add each "
+        "to work_classes, or remove it from class_models."
+    )
+
+
+def _classes(raw: dict[str, object], where: str, prefix: str) -> dict[str, object]:
+    # 0270: null is the same as absent, which reads as the shipped defaults.
+    out: dict[str, object] = {}
+    classes: tuple[tuple[str, str], ...] | None = None
+    models: tuple[tuple[str, str], ...] | None = None
+    if raw.get("work_classes") is not None:
+        try:
+            classes = out["work_classes"] = parse_classes(raw["work_classes"])
+        except ValueError as exc:
+            raise _fail(where, f"{prefix}work_classes", str(exc)) from exc
+    if raw.get("class_models") is not None:
+        try:
+            models = out["class_models"] = parse_models(raw["class_models"])
+        except ValueError as exc:
+            raise _fail(where, f"{prefix}class_models", str(exc)) from exc
+    # 0280: an override with no list of its own is checked against the personal list in load.
+    if models is not None and (classes is not None or not prefix):
+        names = unlisted(classes if classes is not None else DEFAULT_CLASSES, models)
+        if names:
+            raise _unlisted_error(where, f"{prefix}class_models", names)
     return out
 
 
@@ -187,4 +230,11 @@ def overlay(base: Operator, override: dict[str, object]) -> Operator:
 def load(repo_root: Path) -> Operator:
     from lib.config import load_config
 
-    return overlay(load_user(), load_config(cwd=str(repo_root)).operator)
+    base, override = load_user(), load_config(cwd=str(repo_root)).operator
+    models = override.get("class_models")
+    if isinstance(models, tuple) and "work_classes" not in override:
+        # 0280: the project's own mapping names only classes of the list it inherits.
+        names = unlisted(base.work_classes, models)
+        if names:
+            raise _unlisted_error("config.json", "personal_overrides.class_models", names)
+    return overlay(base, override)

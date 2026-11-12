@@ -48,6 +48,19 @@ from lib.manifest import (
 from lib.operator_file import GUIDANCE_SOURCES, MAIN_REFUSAL_CLASSES, OPERATOR_FILE
 from lib.operator_file import TOP_KEYS as OPERATOR_TOP_KEYS
 from lib.settings_maps import SCHEMA_KEY, current
+from lib.work_classes import (
+    DEFAULT_CLASSES,
+    DEFINITION_MAX,
+    MAX_CLASSES,
+    MECHANICAL,
+    MIDDLE_MODEL,
+    NAME_MAX,
+    ORDINARY,
+    SMALLEST_MODEL,
+    TOP_MODEL,
+    classes_json,
+    models_json,
+)
 
 MANIFEST_FILE = MANIFEST_NAME
 CONFIG_FILE = ".claude/daedalus/config.json"
@@ -821,6 +834,36 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "Daedalus saves your stated rules and answer tallies on your machine only.",
         ("scripts/lib/developer_profile.py",),
     ),
+    (OPERATOR_FILE_NAME, "work_classes"): KeyRow(
+        "The classes of work a run tells apart, each a name and a one-sentence definition. A "
+        "project's config may set its own list under `personal_overrides`; that list wins for "
+        "that project and may add, remove or change classes",
+        "list of objects",
+        '`{"name": "<class>", "definition": "<one sentence>"}` entries, at most '
+        f"{MAX_CLASSES}; a name is one line of 1 to {NAME_MAX} characters, unique ignoring "
+        f"case and not starting with an underscore; a definition is one line of 1 to "
+        f"{DEFINITION_MAX} characters",
+        "Absent or `null`: the shipped classes, fourteen kinds of security work plus "
+        f"`{ORDINARY}` and `{MECHANICAL}`; `[]` means no classes, so all work runs on "
+        f'`"{MIDDLE_MODEL}"`',
+        f'`[{{"name": "{ORDINARY}", "definition": "{dict(DEFAULT_CLASSES)[ORDINARY]}"}}]`',
+        f"{NOT_ACTIVE}: no run picks a model by the class of its work.",
+        (),
+    ),
+    (OPERATOR_FILE_NAME, "class_models"): KeyRow(
+        "Which model each class of work runs on; a class with no model here runs on "
+        f'`"{MIDDLE_MODEL}"`. A project\'s config may set its own mapping under '
+        "`personal_overrides`; that mapping wins for that project and may raise or lower any "
+        "class",
+        "object",
+        f"Keys are names the classes list holds; values are {_MODEL_NAMES}; any other name or "
+        "value is refused",
+        f'Absent or `null`: the fourteen security classes on `"{TOP_MODEL}"`, `{ORDINARY}` on '
+        f'`"{MIDDLE_MODEL}"` and `{MECHANICAL}` on `"{SMALLEST_MODEL}"`',
+        f'`{{"{ORDINARY}": "{MIDDLE_MODEL}", "Tokens": "{TOP_MODEL}"}}`',
+        f"{NOT_ACTIVE}: every agent keeps the model it runs on today.",
+        (),
+    ),
 }
 
 
@@ -881,6 +924,9 @@ def starter_operator() -> dict[str, object]:
         "script_language": None,
         "self_assessment": False,
         "developer_profile": False,
+        # 0270: the shipped classes and mapping, written out so the user edits them in place.
+        "work_classes": classes_json(),
+        "class_models": models_json(),
     }
 
 
@@ -1146,7 +1192,7 @@ OVERLAPS: tuple[Overlap, ...] = (
         "A project's config can hold its own copy of any personal preference. A value set "
         "there replaces your personal value for that project only, and the rest still come "
         "from your personal file. Nothing acts on those values yet.",
-        (("scripts/lib/operator_file.py", 183, "a key the override sets replaces the base value"),),
+        (("scripts/lib/operator_file.py", 226, "a key the override sets replaces the base value"),),
         "config",
     ),
 )
