@@ -19,6 +19,7 @@ ALLOWLIST = frozenset(
         ".claude-plugin/marketplace.json",
         ".claude-plugin/plugin.json",
         ".claude/settings.json",
+        ".github/",
         ".gitignore",
         "LICENSE",
         "README.md",
