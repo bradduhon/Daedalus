@@ -64,6 +64,7 @@ def test_tmp_dir_layout_and_modes(tmp_root: Path, repo: Path) -> None:
     assert storage.check_tmp_dirs("self-assessment", repo) is None
 
 
+@pytest.mark.usefixtures("isolated_env")
 def test_a_feature_outside_the_allow_list_is_refused(tmp_root: Path, repo: Path) -> None:
     with pytest.raises(ValueError):
         storage.tmp_dir("other", repo)

@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
+import platform
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -17,15 +18,39 @@ from lib import shell
 from tests.test_confine import ON, _unit
 
 FAKE = '#!/bin/sh\necho "tf_data=$TF_DATA_DIR args=$*"\n'
-# 184: a compiled stand-in; printenv prints the one variable its argument names.
-ELF = "/usr/bin/printenv"
+# 184: static code printing each environment entry on a line; a copied system tool is not used
+# because a multi-call coreutils picks its tool from the name, and "terraform" ran as rm.
+ELF_CODE = {
+    "x86_64": (
+        0x3E,
+        "488b0424488d5cc410488b334885f6742631d2803c1600740548ffc2ebf5c604160a48ffc2b801000000"
+        "bf010000000f054883c308ebd2b83c00000031ff0f05",
+    ),
+    "aarch64": (
+        0xB7,
+        "e00340f9e16f208b33400091610240f9c10100b4020080d2236862386300003442040091fdffff1743018052"
+        "2368223842040091200080d2080880d2010000d473220091f2ffff17000080d2a80b80d2010000d4",
+    ),
+}
+
+
+def _elf() -> bytes:
+    # One PT_LOAD segment holding header and code; other machines get x86_64, read but never run.
+    machine, text = ELF_CODE.get(platform.machine(), ELF_CODE["x86_64"])
+    code, base = bytes.fromhex(text), 0x400000
+    size = 64 + 56 + len(code)
+    head = struct.pack(
+        "<4sBBBB8xHHIQQQIHHHHHH",
+        *(b"\x7fELF", 2, 1, 1, 0, 2, machine, 1, base + 120, 64, 0, 0, 64, 56, 1, 0, 0, 0),
+    )
+    return head + struct.pack("<IIQQQQQQ", 1, 5, 0, base, base, size, size, 0x1000) + code
 
 
 def _home_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     # 184: a compiled fake terraform the session PATH names through a symlinked binary.
     real = tmp_path / "home" / "opt" / "terraform-1.9.0" / "terraform"
     real.parent.mkdir(parents=True)
-    shutil.copy(ELF, real)
+    real.write_bytes(_elf())
     real.chmod(0o755)
     folder = tmp_path / "home" / ".local" / "bin"
     folder.mkdir(parents=True)
@@ -155,12 +180,12 @@ def test_the_wrapper_runs_a_home_bin_terraform_with_its_data_folder_in_tmp(
     _, unit = _unit(tmp_path)
     # 184: with no -chdir the data folder keys on the working folder, the unit worktree here.
     argv = [sys.executable, str(shell.CONFINE_PATH), "--unit", str(unit), "--", "terraform"]
-    argv.append("TF_DATA_DIR")
     env = {**os.environ, "PATH": f"{folder}:/usr/bin:/bin", "TF_DATA_DIR": "/elsewhere"}
     done = subprocess.run(argv, capture_output=True, text=True, check=False, cwd=unit, env=env)
     assert done.returncode == 0, done.stderr
     tmp = Path(daedalus_confine._private_tmp(str(unit.resolve())))
-    assert done.stdout.splitlines()[-1] == str(_data(tmp, unit))
+    seen = [line for line in done.stdout.splitlines() if line.startswith("TF_DATA_DIR=")]
+    assert seen == [f"TF_DATA_DIR={_data(tmp, unit)}"]
 
 
 @pytest.mark.skipif(
