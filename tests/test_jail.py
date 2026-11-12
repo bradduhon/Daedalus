@@ -462,13 +462,12 @@ class TestRegressionToolsAndCwd:
         assert decide({"tool_name": "mcp__x__y", "tool_input": {}, "cwd": CWD}, CFG).allow
 
     @pytest.mark.parametrize("cwd", ["", "relative/repo"])
-    def test_missing_cwd_fails_closed(self, cwd: str) -> None:
-        for agent in (None,):
-            for payload in (_b(agent, "git status"), _w(agent, f"{CWD}/src/a.py")):
-                payload["cwd"] = cwd
-                d = decide(payload, CFG)
-                assert _main_warns(d, notes.NO_WORKING_FOLDER), (agent, cwd)
-                assert "no absolute cwd" in str(d.record), (agent, cwd)
+    def test_missing_cwd_runs_main_with_no_note(self, cwd: str) -> None:
+        # 0277: no working folder names no repository, so main's call runs with no note.
+        for payload in (_b(None, "git status"), _w(None, f"{CWD}/src/a.py")):
+            payload["cwd"] = cwd
+            d = decide(payload, CFG)
+            assert d.allow and not d.warn and d.note is None, cwd
 
 
 # Fix round 3: worker grammars, quote-aware tokenizer, hardened main fallback.
@@ -1794,17 +1793,26 @@ def test_foreign_agent_claude_is_refused_during_a_train(marked_repo: Path) -> No
     assert not d.allow and not d.warn and "read-only while" in str(d.reason), d
 
 
-@pytest.mark.parametrize("command", ["claude -p hi", "nohup claude -p hi", "/usr/bin/claude"])
-def test_main_claude_is_warned(command: str) -> None:
+@pytest.mark.parametrize(
+    "command",
+    [
+        "claude -p hi",
+        "nohup claude -p hi",
+        "/usr/bin/claude",
+        "bash -c 'claude -p hi'",
+        "echo `x`; claude",
+    ],
+)
+def test_main_claude_runs_with_no_note(command: str) -> None:
+    # 0277: a nested session is off the thirteen session notes.
     d = decide(_b(None, command), CFG)
-    assert _main_warns(d, notes.NESTED_SESSION), (command, d.reason)
+    assert d.allow and not d.warn and d.note is None, (command, d.reason)
 
 
-@pytest.mark.parametrize("command", ["bash -c 'claude -p hi'", "echo `x`; claude"])
-def test_main_claude_in_a_body_is_noted(command: str) -> None:
-    # 0259: the note reading walks a shell body and every command after a substitution.
-    d = decide(_b(None, command), CFG)
-    assert _main_warns(d, notes.NESTED_SESSION), (command, d.reason)
+def test_main_claude_body_keeps_the_kept_notes() -> None:
+    # 0277: the words of a nested session's command are still read for the kept classes.
+    d = decide(_b(None, "claude -p hi; git push origin feature/x"), CFG)
+    assert _main_warns(d, notes.PUSH_OR_MERGE), d.reason
 
 
 def test_main_mentions_of_claude_pass() -> None:
@@ -1812,10 +1820,10 @@ def test_main_mentions_of_claude_pass() -> None:
         assert _runs(decide(_b(None, command), CFG)), command
 
 
-def test_main_versioned_claude_path_is_warned(fake_claude: Path) -> None:
+def test_main_versioned_claude_path_runs(fake_claude: Path) -> None:
     # issue 55: the versioned file the PATH link resolves to is the same nested session.
     for command in (f"{fake_claude} -p hi", f"nohup {fake_claude} -p hi"):
-        assert _main_warns(decide(_b(None, command), CFG), notes.NESTED_SESSION), command
+        assert decide(_b(None, command), CFG).allow, command  # 0277: no nested session note.
     assert decide(_b(None, f"ls {fake_claude.parent}"), CFG).allow
 
 

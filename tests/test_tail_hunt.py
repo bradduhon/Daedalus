@@ -82,10 +82,13 @@ MAIN_HUNT = (
     ("config key on a read", "git -c core.pager=x log", "GIT_CONFIG_KEY"),
     ("signing config on a read", "git -c commit.gpgsign=true log", "SIGNING"),
     ("data folder add", "git add .claude/daedalus/config.json", "PROTECTED_WRITE"),
-    ("claude by name", "claude -p hi", "NESTED_SESSION"),
-    ("claude under a wrapper", "timeout 5 claude -p hi", "NESTED_SESSION"),
-    ("claude by path", "/usr/bin/claude", "NESTED_SESSION"),
-    ("claude in a body", "bash -c 'claude -p hi'", "NESTED_SESSION"),
+)
+# 0277: a nested session is off the thirteen session notes, by every spelling.
+MAIN_SILENT = (
+    "claude -p hi",
+    "timeout 5 claude -p hi",
+    "/usr/bin/claude",
+    "bash -c 'claude -p hi'",
 )
 
 
@@ -223,6 +226,12 @@ def test_a_main_tripwire_hunt_form_is_warned_by_name(
     assert d.warn and not d.allow, (klass, command, reason)
     assert d.note == getattr(notes, warning).name and reason.startswith("Warning: "), (klass, d)
     assert "Refused" not in reason and "Next:" in reason, (klass, reason)
+
+
+@pytest.mark.parametrize("command", MAIN_SILENT)
+def test_a_main_nested_session_runs_with_no_note(fake_claude: Path, command: str) -> None:
+    d = jail.decide(_b(None, command), CFG)
+    assert d.allow and not d.warn and d.note is None, (command, d)
 
 
 # 267: the three whole-tree reads the issue names, each refused beside a tracked .env.

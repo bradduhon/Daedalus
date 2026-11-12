@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0259: the main session's note classes, an allow list of what earns a note during a run.
 # A main-session call no row names runs with no note and its audit record says allow.
-# Rows ruled 1 to 3 are the ruling's short list; the rest await the operator's ruling.
+# Rows ruled 1 to 3 are the ruling's short list; 0277 kept the other ten rows as they are.
 from __future__ import annotations
 
 import os
@@ -115,14 +115,6 @@ EXCLUDED_UNCHECKED = NoteClass(
     "fix git_excluded_folders in .claude/daedalus/config.json.",
     "lib.jail._main_excluded",
 )
-NESTED_SESSION = NoteClass(
-    "nested_session",
-    NEEDS_RULING,
-    "{what} starts a nested Claude session. Its calls are judged as yours, with none of an "
-    "agent's limits.",
-    "start nested sessions from your own shell.",
-    "lib.jail.claude_word, lib.shell.R_CLAUDE_PATH, lib.session_reading.unread_note",
-)
 SIGNING = NoteClass(
     "signing",
     NEEDS_RULING,
@@ -138,13 +130,6 @@ GIT_CONFIG_KEY = NoteClass(
     "run git without that option.",
     "lib.shell._git_reason",
 )
-GITHUB_CHANGE = NoteClass(
-    "github_change",
-    NEEDS_RULING,
-    "{what} while a run is active.",
-    "make that change after the run, or from your own shell.",
-    "lib.gh_policy.class_reason, lib.session_reading.unread_note",
-)
 DESTRUCTIVE_DELETE = NoteClass(
     "destructive_delete",
     NEEDS_RULING,
@@ -153,23 +138,7 @@ DESTRUCTIVE_DELETE = NoteClass(
     "delete the files you mean by name.",
     "lib.shell._rm_reason",
 )
-LOOKUP_VARIABLE = NoteClass(
-    "lookup_variable",
-    NEEDS_RULING,
-    "{what} changes a variable that decides which program later commands run, such as PATH "
-    "or LD_PRELOAD, so the plugin cannot tell what those commands do.",
-    "leave that variable unchanged here, and set it from your own shell if the work needs it.",
-    "lib.admit.LOOKUP_VARS, lib.session_reading.unread_note",
-)
-NO_WORKING_FOLDER = NoteClass(
-    "no_working_folder",
-    NEEDS_RULING,
-    "The hook received no working folder, so the plugin cannot tell which repository {what} "
-    "touches.",
-    "report this to the operator.",
-    "lib.jail.integrity_reason",
-)
-# 0259: the typed table; a test reads every row, and nothing outside it earns a note.
+# 0259, 0277: the thirteen-row typed table; a test names every row, nothing outside it is noted.
 NOTE_CLASSES: tuple[NoteClass, ...] = (
     CREDENTIAL_READ,
     PROTECTED_WRITE,
@@ -181,13 +150,9 @@ NOTE_CLASSES: tuple[NoteClass, ...] = (
     RESUME_RULE,
     EXCLUDED_FOLDER,
     EXCLUDED_UNCHECKED,
-    NESTED_SESSION,
     SIGNING,
     GIT_CONFIG_KEY,
-    GITHUB_CHANGE,
     DESTRUCTIVE_DELETE,
-    LOOKUP_VARIABLE,
-    NO_WORKING_FOLDER,
 )
 
 

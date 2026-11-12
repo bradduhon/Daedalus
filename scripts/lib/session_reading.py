@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -74,6 +75,19 @@ _GIT_TRIPWIRES: dict[str, tuple[notes.NoteClass, str]] = {
     shell.R_GIT_CONFIG_KEY: (notes.GIT_CONFIG_KEY, "This git command"),
 }
 _GIT_CREDENTIAL = frozenset({"credential", "credential-store", "credential-cache"})
+# 0277: GitHub API writes that put commits or branches on the remote, a push by another route.
+_GH_PUSH_PATH = re.compile(r"(?:^|/)(?:git/(?:refs|commits|trees|blobs|tags)|contents)(?:/|$)")
+_GH_PUSH_MUTATION = re.compile(r"\b(?:createCommitOnBranch|createRef|updateRefs?)\b")
+# 0277: gh's own top-level commands and help topics (gh 2.97 `gh help`); any other word is an
+# alias or an extension, which may push or merge.
+_GH_KNOWN = frozenset(
+    {"accessibility", "actions", "agent-task", "alias", "api", "attestation", "auth", "browse"}
+    | {"cache", "codespace", "completion", "config", "copilot", "discussion", "environment"}
+    | {"exit-codes", "extension", "formatting", "gist", "gpg-key", "help", "issue", "label"}
+    | {"licenses", "mintty", "org", "pr", "preview", "project", "reference", "release", "repo"}
+    | {"ruleset", "run", "search", "secret", "skill", "ssh-key", "status", "telemetry"}
+    | {"variable", "version", "workflow"}
+)
 # 0136, 0259: git subcommands the excluded roots rule skips as reads.
 _GIT_READS = frozenset(
     {"log", "show", "diff", "status", "ls-files", "grep", "blame", "rev-parse", "branch"}
@@ -116,18 +130,48 @@ def tripwire_note(finding: str, sub: str, released: Released) -> notes.Note | No
 
 
 def gh_note(parsed: gh_policy.GhArgs | None, released: Released) -> notes.Note | None:
-    # 0259: a gh merge is ruled class 3; another gh call off main's list awaits a ruling.
-    if parsed is None:
-        what = "This gh command may change something on GitHub: its flags could not be read"
-        return notes.note(notes.GITHUB_CHANGE, what, gh_policy.R_GH_BUNDLE)
-    klass, detail = gh_policy.classify(parsed)
-    finding = gh_policy.class_reason("main", parsed)
-    if klass == "merge":
-        what = f"This gh {detail} merges a pull request"
-        return None if released() else notes.note(notes.PUSH_OR_MERGE, what, finding or "")
-    if finding is None:
+    # 0259, 0277: a gh push or merge is class 3; every other gh write runs with no note.
+    what = _gh_publish(parsed)
+    if what is None or released():
         return None
-    return notes.note(notes.GITHUB_CHANGE, f"This gh {detail} changes something on GitHub", finding)
+    finding = gh_policy.class_reason("main", parsed) if parsed else gh_policy.R_GH_BUNDLE
+    return notes.note(notes.PUSH_OR_MERGE, what, finding or "")
+
+
+def _gh_publish(parsed: gh_policy.GhArgs | None) -> str | None:
+    # 0277: the gh routes that merge or write commits and branches on GitHub; unread is noted.
+    if parsed is None:
+        return "This gh command may push or merge: the plugin could not read its flags"
+    words = parsed.words
+    if any(_UNREAD in w for w in words[:2]):
+        return "This gh command may push or merge: the plugin could not read its subcommand"
+    klass, detail = gh_policy.classify(parsed)
+    if klass == "merge":
+        return f"This gh {detail} merges on GitHub"
+    # 0277: an alias or an extension runs a command the plugin cannot see, as git's do.
+    if (words and words[0] not in _GH_KNOWN) or words[:2] == ["extension", "exec"]:
+        return f"This gh {' '.join(words[:3])} may push or merge: it runs an alias or an extension"
+    flags = {flag.name for flag in parsed.flags}
+    if words[:2] == ["repo", "sync"] and len(words) > 2:
+        return "This gh repo sync updates a branch on GitHub"
+    if words[:2] == ["repo", "create"] and "--push" in flags:
+        return "This gh repo create --push pushes work to GitHub"
+    if words[:2] == ["pr", "close"] and flags & {"-d", "--delete-branch"}:
+        return "This gh pr close --delete-branch deletes a branch on GitHub"
+    if words[:1] != ["api"]:
+        return None
+    explicit, fields, body, raw = gh_policy._api_parts(parsed)
+    query = " ".join(f.partition("=")[2] for f in fields if f.partition("=")[0] == "query")
+    if any(_UNREAD in part for part in (explicit or "", raw, query)):
+        return "This gh api call may push or merge: the plugin could not read its target"
+    path = gh_policy._endpoint(raw)
+    writes = f"This gh {detail} writes commits or branches on GitHub"
+    if path == "graphql":
+        if body or query.startswith("@"):
+            return "This gh api call may push or merge: the plugin could not read its query"
+        return writes if _GH_PUSH_MUTATION.search(query) else None
+    method = explicit or ("POST" if fields or body else "GET")
+    return writes if method != "GET" and _GH_PUSH_PATH.search(path) else None
 
 
 def push_note(sub: str) -> notes.Note:
@@ -257,7 +301,7 @@ class _Reader:
         family = shell.command_family(name) if name else ""
         # 0259: xargs feeds the command operands the reading cannot see.
         self.fed = any(shell.command_family(w.literal or "") == "xargs" for w in words[:head])
-        found = self.credential(cmd, family) or self.lookup(cmd, words, head, family)
+        found = self.credential(cmd, family)
         if found is not None or not words:
             self.assign(cmd.assignments)
             return found
@@ -278,8 +322,6 @@ class _Reader:
     def credential(self, cmd: Command, family: str) -> notes.Note | None:
         # 0259: a word naming a credential store, a .env file or the reply key; a folder
         # holding a store counts for a command that walks folders.
-        if family == "claude":
-            return notes.note(notes.NESTED_SESSION, "This command")
         walks = family in _TREE_FAMILIES
         named = [*cmd.words, *shparse.redirect_targets(cmd), *(a.value for a in cmd.assignments)]
         for word in named:
@@ -367,12 +409,8 @@ class _Reader:
         return found is None or bool(found)
 
     def gh(self, words: list[Word]) -> notes.Note | None:
-        lits = [w.literal for w in words[1:]]
-        if any(lit is None for lit in lits):
-            what = "This gh command may change something on GitHub: the plugin could not read it"
-            return notes.note(notes.GITHUB_CHANGE, what)
-        parsed = gh_policy.gh_args([lit for lit in lits if lit is not None])
-        return gh_note(parsed, self.released)
+        # 0277: an unread word keeps its marker, so only an unread subcommand or target is noted.
+        return gh_note(gh_policy.gh_args(self.tokens(words[1:])), self.released)
 
     def protected(
         self, cmd: Command, words: list[Word], head: int, family: str
@@ -393,19 +431,6 @@ class _Reader:
                     what = "This command may remove, move or overwrite a folder holding"
                     return notes.note(notes.PROTECTED_WRITE, what)
         return None
-
-    def lookup(self, cmd: Command, words: list[Word], head: int, family: str) -> notes.Note | None:
-        # 262, 0259: a write to a variable that decides which program a later word runs.
-        from lib.admit import LOOKUP_VARS  # 0259: admit imports the jail, which imports this.
-
-        names = [a.name for a in cmd.assignments]
-        names += [self.name(w) for w in words[:head]]
-        if family in _DECLARES or family in _VAR_BUILTINS:
-            names += [self.name(w) for w in words[head + 1 :]]
-        for word in [*words, *shparse.redirect_targets(cmd), *(a.value for a in cmd.assignments)]:
-            names += [n.name for n in shparse.nodes(word) if isinstance(n, Param) and "=" in n.op]
-        hit = next((n for n in names if n in LOOKUP_VARS), None)
-        return None if hit is None else notes.note(notes.LOOKUP_VARIABLE, "This command", hit)
 
     def name(self, word: Word) -> str:
         # 0259: the variable a NAME=value, NAME+=value or bare NAME operand sets.

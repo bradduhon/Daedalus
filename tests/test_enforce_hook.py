@@ -548,9 +548,15 @@ def test_judge_exception_alerts_the_operator_and_records_warn(
 def test_missing_cwd_blocks_even_for_read(run_script: Any, hook_input: Any, cwd: Any) -> None:
     # 0010: the project data dir is located from cwd; without it there is no record, so no action.
     payload = hook_input(tool_name="Read", tool_input={"file_path": "/etc/hosts"}, cwd=cwd)
-    result = run_script("enforce_agent_jail.py", payload)
+    agent = {**payload, "agent_type": "general-purpose", "agent_id": "a-1"}
+    result = run_script("enforce_agent_jail.py", agent)
     assert result.returncode == 2
-    assert "absolute cwd" in result.stderr and "Next:" in result.stderr
+    assert "absolute" in result.stderr and "Next:" in result.stderr
+    # 0277: the main session is never refused; it runs with the unrecorded alert.
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 0, result.stderr
+    alert = main_warning(result.stdout)
+    assert alert.startswith(enforce_agent_jail._AUDIT_WARN.format(tool="Read")), alert
 
 
 def test_config_in_project_data_dir_is_loaded(

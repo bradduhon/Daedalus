@@ -28,14 +28,13 @@ LOOKUP_AGENTS = ("coder", "verifier", "auditor", "orchestrator", "charter-docs",
 
 
 @pytest.mark.parametrize("form", LOOKUP_262)
-def test_main_is_warned_naming_the_lookup_variable(form: str) -> None:
-    # 262, SS-2: the write changes what a later command word runs; main is warned, never refused.
+def test_main_runs_a_lookup_variable_write_with_no_note(form: str) -> None:
+    # 262: main's grammar still types the write as a lookup change; 0277: main runs it unnoted.
     got = jail._admission(form, "main", CWD)[1]
     assert isinstance(got, Refusal) and "changes which program" in got.reason, (form, got)
     assert any(name in got.reason for name in LOOKUP_VARS), (form, got.reason)
     d = jail.decide(_b(None, form), CFG)
-    assert d.allow is False and d.warn and d.note == "lookup_variable", (form, d)
-    assert any(name in str(d.record) for name in LOOKUP_VARS), (form, d.record)
+    assert d.allow and not d.warn and d.note is None, (form, d)
 
 
 @pytest.mark.parametrize("agent", (*LOOKUP_AGENTS, "foreign"))

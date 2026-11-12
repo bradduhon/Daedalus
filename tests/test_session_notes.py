@@ -5,18 +5,20 @@ from __future__ import annotations
 
 import importlib
 import re
+import shlex
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import enforce_agent_jail
 import pytest
-from lib import config, dispatch_binding, jail, session_reading, train_state
+from lib import config, dispatch_binding, jail, session_reading, train_runner, train_state
 from lib import session_notes as notes
 from lib.jail import KNOWN_AGENTS, decide
 
 from tests import hook_chain
 from tests.conftest import CFG, CWD, WT, audit_records, main_warning, write_train_marker
+from tests.jail_cases import seed_train
 from tests.payloads import _b, _cred, _w
 
 DEL = "r" + "m -rf"
@@ -118,7 +120,6 @@ def _trigger(name: str, home: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     found = "Next: name one unit."
     monkeypatch.setattr(dispatch_binding, "_dispatch_reason", lambda *a, **k: found)
     monkeypatch.setattr(dispatch_binding, "main_resume_reason", lambda *a, **k: found)
-    no_cwd = {**_w(None, f"{CWD}/a.py"), "cwd": ""}
     return {
         "credential_read": _cred(None, "Read", file_path=f"{home}/.ssh/id_ed25519"),
         "protected_folder_write": _w(None, f"{CWD}/.claude/daedalus/config.json"),
@@ -130,13 +131,9 @@ def _trigger(name: str, home: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
         "resume_rule": resume,
         "excluded_folder": _b(None, "git add notes/a.md"),
         "excluded_folder_unchecked": _b(None, "git add notes/a.md"),
-        "nested_session": _b(None, "claude -p hi"),
         "signing": _b(None, "git commit -S -m x"),
         "git_config_key": _b(None, "git -c core.pager=x log"),
-        "github_change": _b(None, "gh pr create --title x --body y"),
         "destructive_delete": _b(None, f"{DEL} /"),
-        "lookup_variable": _b(None, "PATH=/x git status"),
-        "no_working_folder": no_cwd,
     }[name]
 
 
@@ -156,7 +153,7 @@ def test_each_note_class_notes_main_and_keeps_its_class_on_the_record(
     d = decide(_trigger(klass.name, cred_home, monkeypatch), CFG)
     assert _noted(d, klass), (klass.name, d)
     assert d.record is not None and d.record.startswith(f"{klass.name}: {d.reason}"), d.record
-    assert "Next: " in str(d.reason) and "Refused" not in str(d.reason), d.reason
+    assert "Next: " in str(d.reason) and "refused" not in str(d.reason).casefold(), d.reason
 
 
 @pytest.mark.parametrize(
@@ -165,7 +162,7 @@ def test_each_note_class_notes_main_and_keeps_its_class_on_the_record(
         ("git push -u origin feature/x", "push_or_merge"),
         ("git add .claude/daedalus/config.json", "protected_folder_write"),
         ("cat ~/.ssh/id_ed25519", "credential_read"),
-        ("claude -p hi", "nested_session"),
+        ("gh pr merge 5", "push_or_merge"),
     ],
 )
 def test_a_noted_call_runs_and_records_warn_with_its_class_and_note(
@@ -182,7 +179,7 @@ def test_a_noted_call_runs_and_records_warn_with_its_class_and_note(
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 0 and result.stderr == "", result
     note = main_warning(result.stdout)
-    assert note.startswith("Warning: ") and "Refused" not in note, note
+    assert note.startswith("Warning: ") and "refused" not in note.casefold(), note
     rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
     assert rec["decision"] == "warn", rec
     assert str(rec["reason"]).startswith(f"jail: {klass}: {note}"), rec["reason"]
@@ -232,7 +229,23 @@ HUNT = (
     ("gh pr merge 5", "push_or_merge"),
     ("cd x && gh pr merge 5", "push_or_merge"),
     ("git -c alias.p=push p", "git_config_key"),
-    ("PATH=/tmp/x git status", "lookup_variable"),
+    # 0277: a gh call that pushes or merges by another route keeps the push note.
+    ("gh api -X PUT repos/o/r/pulls/5/merge", "push_or_merge"),
+    ("gh api -X PATCH repos/o/r/git/refs/heads/x -f sha=y", "push_or_merge"),
+    ("gh api -X DELETE repos/o/r/git/refs/heads/x", "push_or_merge"),
+    ("gh api -X PUT repos/o/r/contents/a.md -f message=x", "push_or_merge"),
+    (
+        "gh api graphql -f query='mutation { createCommitOnBranch(input: {}) { x } }'",
+        "push_or_merge",
+    ),
+    ("gh api graphql --input q.json", "push_or_merge"),
+    ("gh pr close 5 --delete-branch", "push_or_merge"),
+    ("gh repo create x --source . --push", "push_or_merge"),
+    ("gh repo sync o/fork", "push_or_merge"),
+    ("gh co 5", "push_or_merge"),
+    ("gh extension exec x", "push_or_merge"),
+    ('gh "$c" merge 5', "push_or_merge"),
+    ("gh pr merge -sd 5", "push_or_merge"),
 )
 
 
@@ -245,7 +258,7 @@ def test_a_hunt_form_off_mains_grammar_is_still_noted(
     (cred_home / ".aws").mkdir()
     d = decide(_b(None, command), CFG)
     assert d.warn and d.note == klass, (command, d)
-    assert "Refused" not in str(d.reason), d.reason
+    assert "refused" not in str(d.reason).casefold(), d.reason
 
 
 @pytest.mark.usefixtures("jail_fakes")
@@ -300,3 +313,137 @@ def test_the_excluded_reading_finds_a_case_trick_off_mains_grammar(tmp_path: Pat
         session_reading.excluded_reason("git add src/a.md $(true)", str(repo), lambda: roots)
         is None
     )
+
+
+# 0277: the thirteen session notes; these names are the whole table, in its order.
+THIRTEEN = (
+    "credential_read",
+    "protected_folder_write",
+    "push_or_merge",
+    "credential_write",
+    "git_metadata_write",
+    "main_checkout_write",
+    "dispatch_rule",
+    "resume_rule",
+    "excluded_folder",
+    "excluded_folder_unchecked",
+    "signing",
+    "git_config_key",
+    "destructive_delete",
+)
+_ISSUE_NEW = "gh issue " + "create"
+# 0277: forms of the four dropped classes and gh writes that are neither a push nor a merge.
+DROPPED = (
+    "gh pr create --title x --body y",
+    f"{_ISSUE_NEW} --title x --body y",
+    f'{_ISSUE_NEW} --title x --body "$B"',
+    "gh release create v1",
+    "gh alias set co 'pr merge'",
+    "gh api -f title=x repos/o/r/issues",
+    "gh api -X PATCH repos/o/r",
+    "claude -p hi",
+    "timeout 5 claude -p hi",
+    "bash -c 'claude -p hi'",
+    "PATH=/x git status",
+    "export PATH=/x:/y; git log",
+    "LD_PRELOAD=/x.so git status",
+)
+
+
+def test_the_table_holds_exactly_the_thirteen_session_notes() -> None:
+    assert tuple(k.name for k in notes.NOTE_CLASSES) == THIRTEEN
+    dropped = ("NESTED_SESSION", "GITHUB_CHANGE", "LOOKUP_VARIABLE", "NO_WORKING_FOLDER")
+    assert not any(hasattr(notes, name) for name in dropped)
+
+
+@pytest.mark.usefixtures("jail_fakes")
+@pytest.mark.parametrize("command", DROPPED)
+def test_a_dropped_class_form_runs_with_no_note(command: str) -> None:
+    d = decide(_b(None, command), CFG)
+    assert d.allow and not d.warn and d.reason is None and d.note is None, (command, d)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr create --title x --body y",
+        f"{_ISSUE_NEW} --title x",
+        "claude -p hi",
+        "PATH=/x git status",
+    ],
+)
+def test_a_dropped_class_form_records_allow_with_no_reason(
+    run_script: Any, project_data: Path, hook_input: Any, command: str
+) -> None:
+    write_train_marker(project_data.parent.parent)
+    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", ""), result
+    rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
+    assert rec["decision"] == "allow" and rec["reason"] is None, rec
+
+
+@pytest.mark.usefixtures("jail_fakes")
+@pytest.mark.parametrize("cwd", ["", "relative/repo"])
+def test_a_call_with_no_working_folder_runs_with_no_note(cwd: str, cred_home: Path) -> None:
+    for payload in (_b(None, "git push origin x"), _w(None, f"{CWD}/.git/config")):
+        d = decide({**payload, "cwd": cwd}, CFG)
+        assert d.allow and not d.warn and d.note is None, (cwd, d)
+    # 0277: the credential checks need no folder, so they still note an absolute store path.
+    key = f"{cred_home}/.ssh/id_ed25519"
+    d = decide({**_cred(None, "Read", file_path=key), "cwd": cwd}, CFG)
+    assert d.note == "credential_read", d
+
+
+def test_a_call_with_no_working_folder_gets_only_the_unrecorded_alert(
+    run_script: Any, hook_input: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 0277: no folder names no log to record in; the hook's own alert says so, never a note.
+    monkeypatch.chdir(tmp_path)
+    payload = hook_input(tool_input={"command": "git push origin x"}, cwd="")
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 0, result
+    alert = main_warning(result.stdout)
+    assert alert.startswith(enforce_agent_jail._AUDIT_WARN.format(tool="Bash")), alert
+    assert not any(name in alert for name in THIRTEEN), alert
+    assert not (tmp_path / ".claude").exists()
+
+
+def _release_choice() -> list[str]:
+    # 0277: the release skill's own step 7 command, read from the skill text.
+    text = (Path(__file__).resolve().parents[1] / "skills" / "release" / "SKILL.md").read_text()
+    step7 = text.split("\n7. ", 1)[1].split("\n8. ", 1)[0]
+    found = re.search(
+        r"`python3 \$\{CLAUDE_PLUGIN_ROOT\}/scripts/daedalus_train\.py (choice [^`]+)`", step7
+    )
+    assert found is not None, step7
+    return shlex.split(found.group(1))
+
+
+@pytest.mark.usefixtures("jail_fakes")
+@pytest.mark.parametrize("command", ["git push -u origin feature/x", "gh pr merge 5"])
+def test_the_release_step_records_the_phase_and_silences_the_push_note(
+    repo_cwd: Path, command: str
+) -> None:
+    seed_train(repo_cwd, train="20261016-120000")
+    payload = _cred(None, "Bash", str(repo_cwd), command=command)
+    assert decide(payload, CFG).note == "push_or_merge"
+    args = _release_choice()
+    assert args[args.index("--phase") + 1] == "release", args
+    value = {k: args[args.index(f"--{k}") + 1] for k in ("chose", "over", "cost")}
+    outcome = train_runner.choice(repo_cwd, phase="release", **value)
+    assert outcome.code == train_runner.EXIT_OK, outcome
+    assert train_state.load(repo_cwd, "20261016-120000")[train_state.PHASE] == "release"
+    d = decide(payload, CFG)
+    assert d.allow and not d.warn and d.note is None, d
+
+
+def test_the_release_step_command_is_kept_in_the_audit_log(
+    run_script: Any, repo_cwd: Path, project_data: Path, hook_input: Any
+) -> None:
+    # 0277: the phase is set by a main-session command, so the audit log keeps who set it.
+    seed_train(repo_cwd, train="20261016-120000")
+    command = "python3 /p/scripts/daedalus_train.py " + shlex.join(_release_choice())
+    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
+    assert result.returncode == 0, result
+    rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
+    assert rec["decision"] == "allow" and "--phase release" in str(rec["tool_input"]), rec

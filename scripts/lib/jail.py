@@ -578,10 +578,6 @@ def download_reason(segment: list[str]) -> str | None:
     return None
 
 
-R_NESTED_CLAUDE = (
-    "claude starts a nested session the jail cannot attribute to an agent (audit A7-1). "
-    "Next: run it from your own shell."
-)
 # 0028: the conductor's gh set lives in lib.gh_policy.
 GH_ALLOWED = {cmd: frozenset(sub for c, sub in CONDUCTOR_GH if c == cmd) for cmd, _ in CONDUCTOR_GH}
 _BRANCH_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
@@ -2879,14 +2875,14 @@ def integrity_reason(tool: str, tool_input: dict[str, object], cwd: str, agent: 
 
 def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision:
     # 0259: the main session meets the note classes alone, never the agents' command tables.
+    if not os.path.isabs(cwd):
+        return _allow()  # 0277: no working folder names no repository to judge a class against.
     command = str(tool_input.get("command") or "")
     raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     is_write = tool in WRITE_TOOLS
     path = _abs(raw_path, cwd)
     what = notes.tool_what(tool, tool_input, cwd)
     integrity = integrity_reason(tool, tool_input, cwd, "main")
-    if integrity == R_NO_CWD:
-        return _noted(notes.note(notes.NO_WORKING_FOLDER, "this call", R_NO_CWD))
     if integrity == R_DOTGIT:
         return _noted(notes.note(notes.GIT_METADATA_WRITE, what, R_DOTGIT))
     if integrity is not None:
@@ -2920,29 +2916,19 @@ def _main_bash(command: str, cwd: str) -> Decision:
     script, got = _admission(command, "main", cwd)
     released = _release_check(cwd)
     if _passed(got):
-        base = admitted_base(script, got, cwd)
         for done in got.commands:
-            found = _admitted_note(script, done, base, released)
+            found = _admitted_note(script, done, released)
             if found is not None:
                 return _noted(found)
         return _allow()
-    refused = _refused(got)
-    # audit A7-1, issue 55: the refused word runs the claude binary by name, link or path.
-    if refused is not None and (
-        refused.family == "claude" or refusal_constant(script, refused, cwd) == shell.R_CLAUDE_PATH
-    ):
-        detail = refusal_text(refused, R_NESTED_CLAUDE)
-        return _noted(notes.note(notes.NESTED_SESSION, "This command", detail))
     found = session_reading.unread_note(command, cwd, released)
     return _noted(found) if found is not None else _allow()
 
 
 def _admitted_note(
-    script: Script, done: AdmittedCommand, base: str, released: Callable[[], bool]
+    script: Script, done: AdmittedCommand, released: Callable[[], bool]
 ) -> notes.Note | None:
-    # 0259: one typed command's note: a nested session, a git or rm tripwire, a push or a gh call.
-    if claude_word(done, base):
-        return notes.note(notes.NESTED_SESSION, "This command", R_NESTED_CLAUDE)
+    # 0259: one typed command's note: a git or rm tripwire, a push or a gh push or merge.
     sub = done.subcommand.text if done.subcommand is not None else ""
     tripwire = admitted_tripwire(script, done)
     if tripwire == shell.R_DESTRUCTIVE:

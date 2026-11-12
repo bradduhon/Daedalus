@@ -279,9 +279,9 @@ def _hook_failed(
     next_step: str = _REPORT_NEXT,
 ) -> int:
     # Main never prompted (amends 0106): a hook failure alerts the main session, never asks.
-    # 0010: no absolute cwd names no repository to record in, so that call stays blocked.
+    # 0010, 0277: no absolute cwd names no log; an agent's call stays blocked, main is alerted.
     cwd = payload.get("cwd")
-    if not _bare_main(payload) or not (isinstance(cwd, str) and os.path.isabs(cwd)):
+    if not _bare_main(payload):
         return _record_and_block(payload, agent, f"{hook}: {exc}", next_step)
     from lib.audit import audit_append
 
@@ -289,6 +289,8 @@ def _hook_failed(
     text = f"{warn_lead.format(tool=tool)} ({exc})."
     if "Next:" not in text:
         text += next_step
+    if not (isinstance(cwd, str) and os.path.isabs(cwd)):
+        return _alert(agent, text)
     try:
         # 92, AU-3: the row records the decision taken, warn, with the warning as reason.
         audit_append(payload, "warn", f"{hook}: {text}")
@@ -362,8 +364,10 @@ def _judge(payload: dict[str, object], agent: str) -> int:
     # 0023: reads carry only the credential deny, so a broken data dir never closes them.
     read = payload.get("tool_name") in CREDENTIAL_TOOLS and isinstance(cwd, str)
     read = read and Path(str(cwd)).is_absolute()
+    # 0277: no working folder names no config.json; main's call is judged on the defaults.
+    homeless = _bare_main(payload) and not (isinstance(cwd, str) and os.path.isabs(cwd))
     try:
-        config = load_config(cwd if isinstance(cwd, str) else None)
+        config = Config() if homeless else load_config(cwd if isinstance(cwd, str) else None)
     except Exception as exc:  # noqa: BLE001
         if not read:
             # Main never prompted (amends 0106): main is alerted, never asked; agents stay blocked.

@@ -135,10 +135,6 @@
     "failure": "0023: an agent file with no hooks block runs with no jail policy during a train",
     "premise_test": "tests/test_router.py::test_agent_without_a_hooks_block_is_refused_with_no_binding"
   },
-  "jail.R_NESTED_CLAUDE": {
-    "failure": "audit A7-1: a nested claude session reaches the jail as the operator and escapes every agent rule",
-    "premise_test": "tests/test_jail.py::test_main_claude_is_warned"
-  },
   "jail.R_NAMESPACED_MAIN": {
     "failure": "0106: a namespaced agent claims the operator's role and is warned in context like the operator instead of getting an agent's denies",
     "premise_test": "tests/test_jail.py::test_namespaced_main_reason"
