@@ -218,7 +218,106 @@ def test_a_real_transcript_past_the_limit_refuses(
     assert code == 2 and f"at {PAST}" in err and str(case.handoff()) in err
 
 
+@pytest.mark.parametrize("value", ["absent", None])
+def test_no_transcript_path_warns_and_never_calls_the_reader(case: Case, value: object) -> None:
+    payload = case.payload("coder", "Read", {"file_path": str(case.repo / "a")})
+    if value == "absent":
+        del payload["transcript_path"]
+    else:
+        payload["transcript_path"] = value
+    outcome = handoff.check(payload, "coder", Config(), REPO_ROOT, _raises)
+    assert outcome == handoff.Outcome(handoff.Step.WARN, handoff.W_NO_TRANSCRIPT_PATH)
+
+
+@pytest.mark.parametrize("value", [5, "", "relative/s.jsonl", ["/x.jsonl"]])
+def test_an_unusable_transcript_path_still_goes_to_the_reader_and_refuses(
+    case: Case, value: object
+) -> None:
+    payload = case.payload("coder", "Read", {"file_path": str(case.repo / "a")})
+    payload["transcript_path"] = value
+    outcome = handoff.check(payload, "coder", Config(), REPO_ROOT)
+    assert_refused(outcome)
+    assert outcome.text is not None and Reason.NO_PATH.label in outcome.text
+
+
+def test_a_call_without_a_transcript_path_runs_with_a_warn_record(
+    case: Case, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    payload = case.payload("verifier", "Read", {"file_path": str(case.repo / "README.md")})
+    del payload["transcript_path"]
+    code, _ = _jail(monkeypatch, capsys, payload, _raises)
+    record = _last_record(case)
+    assert code == 0 and record["decision"] == "warn"
+    assert record["reason"] == f"jail: {handoff.W_NO_TRANSCRIPT_PATH}"
+
+
+def test_a_malformed_settings_file_refuses_a_bound_agent_with_the_wizard_text(
+    case: Case, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = case.home / ".claude" / "daedalus" / "operator.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"context_limit": -5}\n', encoding="utf-8")
+    payload = case.payload("coder", "Read", {"file_path": str(case.repo / "README.md")})
+    code, err = _jail(monkeypatch, capsys, payload, _raises)
+    assert code == 2 and err.count("Next:") == 1
+    assert "~/.claude/daedalus/operator.json" in err and "context limit could not be read" in err
+    assert err.rstrip().endswith(
+        "Next: repair ~/.claude/daedalus/operator.json with the settings wizard, /daedalus:setup."
+    )
+    record = _last_record(case)
+    assert record["decision"] == "block" and "context limit could not be read" in record["reason"]
+
+
+def test_a_malformed_settings_file_leaves_main_and_an_agent_outside_a_run_alone(
+    case: Case, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = case.home / ".claude" / "daedalus" / "operator.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{", encoding="utf-8")
+    main = case.payload("main", "Read", {"file_path": str(case.repo / "README.md")})
+    del main["agent_id"], main["agent_type"]
+    assert _jail(monkeypatch, capsys, main, _raises)[0] == 0
+    (case.repo / ".claude" / "daedalus" / "train.active").unlink()
+    agent = case.payload("coder", "Read", {"file_path": str(case.repo / "a")})
+    assert handoff.check(agent, "coder", Config(), REPO_ROOT, _raises) == handoff.GO
+
+
 # Items 3, 4 and 6: one admitted row, the refusal texts, every agent kind.
+
+
+@pytest.mark.parametrize("agent", WRITERS)
+def test_the_admitted_handoff_write_carries_the_plugin_approval(
+    case: Case, agent: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    payload = case.payload(agent, "Write", _write(case, str(case.handoff())))
+    monkeypatch.setattr(handoff, "context_size", sized(PAST))
+    assert enforce_agent_jail._judge(payload, agent) == 0
+    out = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert out == {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "permissionDecisionReason": "Daedalus approval list: handoff-write (0253)",
+    }
+
+
+@pytest.mark.parametrize("agent", WRITERS)
+def test_a_sibling_write_past_the_limit_carries_no_approval(
+    case: Case, agent: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(handoff, "context_size", sized(PAST))
+    for target in _siblings(case):
+        payload = case.payload(agent, "Write", _write(case, target))
+        assert enforce_agent_jail._judge(payload, agent) == 2
+        assert capsys.readouterr().out == ""
+
+
+def test_an_allowed_agent_call_below_the_limit_carries_no_approval(
+    case: Case, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    payload = case.payload("verifier", "Read", {"file_path": str(case.repo / "README.md")})
+    monkeypatch.setattr(handoff, "context_size", sized(1000))
+    assert enforce_agent_jail._judge(payload, "verifier") == 0
+    assert capsys.readouterr().out == ""
 
 
 def test_the_kinds_split_by_their_tools_line() -> None:

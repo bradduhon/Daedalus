@@ -53,8 +53,18 @@ R_UNMEASURED = (
     "run (0284). Next: look at this agent's transcript in its session's subagents folder under "
     "{root}, and tell the operator the reason."
 )
+R_LIMIT_UNREAD = (
+    "the context limit could not be read from {file} ({why}), so no call of this agent runs "
+    "during a run (0284). Next: repair {file} with the settings wizard, /daedalus:setup."
+)
 W_UNMEASURED = "the context size was not measured ({label}), so the call went on unchecked (0284)"
+W_NO_TRANSCRIPT_PATH = (
+    "the hook input carried no transcript path, so the context size was not measured and the "
+    "call went on unchecked (0284)"
+)
 ADMITTED = "the hand-off write past the context limit (0284)"
+# 0253, 0284: the approval name the jail prints for an admitted hand-off write.
+APPROVAL = "handoff-write"
 
 
 class Step(enum.Enum):
@@ -182,9 +192,20 @@ def check(
 
     if not hook_input.get("agent_id") or not train_marked(hook_input.get("cwd")):
         return GO
-    limit = limit_for(config)
+    from lib.operator_file import OPERATOR_FILE, OperatorError
+
+    try:
+        limit = limit_for(config)
+    except OperatorError as exc:
+        # 0284: one Next line, so the reader's own is cut and the wizard's is given.
+        why = str(exc).split(" Next:", 1)[0]
+        file = f"~/{OPERATOR_FILE.as_posix()}"
+        return Outcome(Step.REFUSE, R_LIMIT_UNREAD.format(file=file, why=why))
     if limit is None:
         return GO
+    if hook_input.get("transcript_path") is None:
+        # 0284: no agent can drop a hook input field; its absence is the client's doing.
+        return Outcome(Step.WARN, W_NO_TRANSCRIPT_PATH)
     read = reader if reader is not None else context_size
     size = read(
         hook_input.get("transcript_path"), hook_input.get("session_id"), hook_input.get("agent_id")

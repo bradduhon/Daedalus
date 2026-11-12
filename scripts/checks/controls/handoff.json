@@ -16,7 +16,11 @@
     "premise_test": "tests/test_handoff.py::test_a_link_planted_at_the_handoff_path_is_refused"
   },
   "handoff.R_UNMEASURED": {
-    "failure": "0284: an agent whose context size cannot be read runs unchecked during a run, so a forged or broken transcript path turns the limit off",
+    "failure": "0284: an agent whose context size cannot be read runs unchecked during a run, so a forged or broken transcript path turns the limit off; a hook input with no transcript path at all runs with a warning, because only the client can leave that field out",
     "premise_test": "tests/test_handoff.py::test_each_unmeasured_reason_warns_or_refuses_by_its_handling"
+  },
+  "handoff.R_LIMIT_UNREAD": {
+    "failure": "0284: a personal settings file the reader refuses leaves the context limit unknown, so an agent in a run would work on with no limit",
+    "premise_test": "tests/test_handoff.py::test_a_malformed_settings_file_refuses_a_bound_agent_with_the_wizard_text"
   }
 }

@@ -183,14 +183,19 @@ def _approved(payload: dict[str, object]) -> int:
 
         row = approve(payload)
         if row is not None:
-            out = {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "permissionDecisionReason": f"Daedalus approval list: {row} (0253)",
-            }
-            print(json.dumps({"hookSpecificOutput": out}))
+            _approval(row)
     except Exception:  # noqa: BLE001, S110
         pass
+    return 0
+
+
+def _approval(row: str) -> int:
+    out = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "permissionDecisionReason": f"Daedalus approval list: {row} (0253)",
+    }
+    print(json.dumps({"hookSpecificOutput": out}))
     return 0
 
 
@@ -377,6 +382,8 @@ def _judge(payload: dict[str, object], agent: str) -> int:
     warn = False
     # 0284: a routed allow the context check warned on is recorded as warn.
     noted = False
+    # 0253, 0284: the admitted hand-off write, the one agent call the approval output carries.
+    admitted: str | None = None
     finding: str | None = None
     reason: str | None
     if routed(agent):
@@ -385,6 +392,8 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         plugin_root = Path(__file__).resolve().parents[1]
         # 0284: the context limit decides first; past it only the hand-off write is admitted.
         limit = handoff.check(payload, normalize_agent(agent), config, plugin_root)
+        if limit.step is handoff.Step.ADMIT:
+            admitted = handoff.APPROVAL
         if limit.step in (handoff.Step.ADMIT, handoff.Step.REFUSE):
             allow, reason = limit.step is handoff.Step.ADMIT, f"{_JAIL_HOOK}: {limit.text}"
         else:
@@ -423,6 +432,9 @@ def _judge(payload: dict[str, object], agent: str) -> int:
     if fell_back:
         _warn_fallback(str(payload.get("cwd")))
     if allow:
+        if admitted is not None:
+            # 0284: the stopped agent's one call never waits on a permission prompt.
+            return _approval(admitted)
         if payload.get("tool_name") in ("Agent", "Task"):
             _record_run(payload, agent)
             return 0
