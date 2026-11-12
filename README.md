@@ -736,6 +736,7 @@ Daedalus/
 │   ├── lib/train_state.py           # one state file per train
 │   ├── lib/train_summary.py         # the train summary, written from state and the audit log
 │   ├── lib/unit_binding.py          # one coder per unit worktree
+│   ├── lib/user_keys.py             # the rule that a key starting with an underscore is the user's own
 │   ├── lib/workspace.py             # unit worktrees and the train marker
 │   ├── lib/writer_mode.py           # the kind each writer's dispatch recorded
 │   ├── append_ledger.py             # locked, sequence-checked ledger writer
