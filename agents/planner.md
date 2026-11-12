@@ -26,7 +26,9 @@ never edit the spec.
 ## Your brief
 It names, each on its own line: the spec path; the standing-rules file path, when a
 decisions file is named and the summary beside it exists (0247); `limits.parallel_coders: <n>`; the repository's
-file areas (the `code_areas` block of `service-manifest.json`, or `none declared`); the dependency map's
+file areas (the `code_areas` block of `service-manifest.json`, or `none declared`); the work
+classes, one `class: <name> | place: <required or not required> | definition: <one sentence>`
+line each (0280); the dependency map's
 `map.md` and `map.json` paths, when the train wrote them with `daedalus_map.py`; the Standards
 Packet path, when one is written; and the one file you write, on a
 `Write exactly one file: <path>` line. Inside a train that file is
@@ -159,6 +161,7 @@ Markdown for the reader around exactly one fenced block the validator reads:
     ```plan
     unit: A1 | title: <plain words> | files: <path or glob>[, ...] | base: <integration|unit id>
     unit: A2 | title: <plain words> | files: <path>[, ...] | base: integration | needs: <tool or protected path>[, ...]
+    unit: A3 | title: <plain words> | files: <path>[, ...] | base: integration | class: <class name> | place: <file>:<named part> | class_reason: <one line>
     edge: A1 -> A3 | kind: serial | why: <import or interface>
     edge: A6 ~ A7 | kind: overlap | files: <path>[, ...] | merge: A6 then A7
     pin: A5 -> A8 | <the flag, function or line shape both sides build to>
@@ -188,6 +191,18 @@ The `operator_checks:` field is optional (0164, 0192). Anything that needs a GPU
 a running server goes there as plain-words checks separated by semicolons, at most ten, such as
 `operator_checks: the scene loads; the player can move`, and never in a coder test command; the
 verify phase asks the operator each one.
+
+Give every unit a `class:` field naming one class from the work classes your brief lists
+(0267, 0280). A unit with no `class:` field is `Plumbing`. A class applies only when the unit
+builds or changes the thing the class names; a unit that only uses it is `Plumbing` (0274). An
+endpoint that serves a certificate is plumbing; the authentication in front of it is not. For a
+class the list marks `place: required`, name the place as `place: <file>:<named part>`: a file
+from the unit's own `files:` list and the named part of it where the work happens, a function in
+code or a section in a document. Give every unit whose class is not `Plumbing` a `class_reason:`,
+one line saying why the work has that class; the plan table shows it to the operator. The
+validator refuses a class the list does not hold, a place whose file is not in the unit's list,
+a class marked `place: required` with no place, and a class other than `Plumbing` with no
+reason.
 
 Below the block, every unit has one requirement section in this shape (pin REQ -> VER):
 

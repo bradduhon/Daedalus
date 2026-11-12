@@ -268,6 +268,8 @@ def test_only_the_named_modules_mention_operator_file() -> None:
     allowed.add("work_classes.py")
     # 0284: the jail reads the context limit through load_user and overlay.
     allowed.add("handoff.py")
+    # 0280: the plan validator loads the work classes; the plan record takes them, typed only.
+    allowed.update({"validate_plan.py", "plan_record.py", "train_runner.py"})
     found = {
         path.name
         for path in (REPO_ROOT / "scripts").rglob("*.py")
