@@ -20,19 +20,23 @@
     "premise_test": "tests/test_persona_jails.py::test_public_docs_writer_bash_writes_stay_on_the_public_docs"
   },
   "command_allowlist.R_TERRAFORM": {
-    "failure": "0132: the auditor runs init, plan, apply or another subcommand, so a review changes state or infrastructure",
+    "failure": "0132: the auditor runs plan, apply or another subcommand beside fmt -check, so a review changes state or infrastructure",
     "premise_test": "tests/test_persona_jails.py::test_terraform_class_refuses_every_other_form"
   },
   "command_allowlist.R_TERRAFORM_OFF": {
     "failure": "0132: the auditor runs terraform while the project turned checks.terraform_format off",
-    "premise_test": "tests/test_persona_jails.py::test_terraform_class_refuses_both_checks_when_the_switch_is_off"
+    "premise_test": "tests/test_persona_jails.py::test_terraform_class_refuses_validate_whatever_the_switch"
   },
   "command_allowlist.R_TERRAFORM_MANIFEST": {
     "failure": "0132: an unreadable service manifest hides the terraform_tools switch, so terraform runs when the project may have turned it off",
     "premise_test": "tests/test_persona_jails.py::test_terraform_class_fails_closed_on_an_unreadable_manifest"
   },
   "command_allowlist.R_TERRAFORM_VALIDATE_OFF": {
-    "failure": "0158: the auditor runs terraform validate while checks.terraform_validate is not true, so provider programs under .terraform/providers start unconfined",
-    "premise_test": "tests/test_checks_command_allowlist.py::test_terraform_validate_refused_unless_the_switch_is_true"
+    "failure": "0158: a coder runs the wrapped terraform init form while checks.terraform_validate is not true, so providers are installed for a project that never turned the check on",
+    "premise_test": "tests/test_confine.py::test_terraform_checks_need_the_wrapper_and_validate_its_switch"
+  },
+  "command_allowlist.R_TERRAFORM_RUN_VALIDATES": {
+    "failure": "0265: issue 118, the auditor runs terraform validate or init, bare or wrapped, and a provider program a coder committed under .terraform/ in the checked-out tree starts as the operator",
+    "premise_test": "tests/test_checks_command_allowlist.py::test_the_auditor_runs_no_validate_or_init_bare_or_wrapped"
   }
 }

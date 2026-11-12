@@ -20,6 +20,7 @@ _SCRATCH = "<repo>/docs/.tmp/daedalus"
 _FRAMEWORKS = "<cache>/frameworks/<family>"
 _CONFINE = "$TMPDIR/daedalus-confine-<uid>/<16 hex>"
 _MIRROR = "/tmp/.daedalus/<uid>/provider-mirror/<project key>/<train-id>"
+_VALIDATE = "/tmp/.daedalus/<uid>/terraform-validate/<project key>/<train-id>"
 _BRANCH = "refs/heads/daedalus/<train-id>"
 _UNIT = "refs/heads/daedalus-unit/<train-id>-<unit-slug>"
 _AUDIT_UNIT = "refs/heads/daedalus-unit/<train-id>-audit"
@@ -125,6 +126,29 @@ FILES: tuple[Entry, ...] = (
         f"{_MIRROR}/tf-data/",
         "scripts/lib/provider_mirror.py:make_mirror",
         "daedalus_train.py providers runs; the fetch's TF_DATA_DIR, never inside the project",
+    ),
+    Entry(
+        f"{_VALIDATE}/ and {_VALIDATE}/unit-<random>/",
+        "scripts/lib/tf_validate.py:make_stage",
+        "daedalus_train.py validate runs with checks.terraform_validate true; mode 0700, the "
+        "unit folder is removed when the command ends",
+    ),
+    Entry(
+        f"{_VALIDATE}/unit-<random>/<n>/ with tree/, data/, home/ and terraformrc",
+        "scripts/lib/tf_validate.py:_root_stage",
+        "daedalus_train.py validate runs; one folder per Terraform root the unit changed",
+    ),
+    Entry(
+        f"{_VALIDATE}/unit-<random>/<n>/tree/<root and local module folders>/",
+        "scripts/lib/tf_validate.py:_write_tree",
+        "daedalus_train.py validate runs; .tf files read as git blobs of the unit tip and a "
+        "hash-free lock, never from the worktree",
+    ),
+    Entry(
+        f"{_VALIDATE}/unit-<random>/<n>/data/modules/modules.json",
+        "scripts/lib/tf_validate.py:_run_root",
+        "daedalus_train.py validate runs; the module list the command wrote, so init downloads "
+        "no module",
     ),
     Entry(
         f"{_CONFINE}/tf-data/<16 hex>/",

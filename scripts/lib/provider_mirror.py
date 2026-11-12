@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import resource
 import shutil
 import signal
 import stat
@@ -24,6 +25,8 @@ FETCH_TIMEOUT_S = 600
 GIT_TIMEOUT_S = 30.0
 MAX_TF_BYTES = 1 << 20
 ERROR_MAX = 200
+# 0265: the most of a terraform stream decoded; diagnostics past it are not read.
+OUTPUT_MAX = 4 << 20
 LOCK_FILE = ".terraform.lock.hcl"
 STAGED_TF = "providers.tf"
 # 0256: path parts the base-tree walk never enters; links and submodules are never read.
@@ -192,21 +195,28 @@ def _git_text(top: str, args: list[str]) -> str | None:
     return done.stdout if done.returncode == 0 else None
 
 
-def _tree(top: str, base: str) -> list[tuple[str, str, int]] | None:
-    # 0256: (path, blob id, size) of each regular file at base; links and submodules are dropped.
-    out = _git_text(top, ["ls-tree", "-r", "-z", "-l", "--full-tree", base])
+def tree_entries(top: str, rev: str) -> list[tuple[bool, str, str, int]] | None:
+    # 0256, 0265: (regular file, path, object id, size) of every entry at rev; size -1 when none.
+    out = _git_text(top, ["ls-tree", "-r", "-z", "-l", "--full-tree", rev])
     if out is None:
         return None
-    found: list[tuple[str, str, int]] = []
+    found: list[tuple[bool, str, str, int]] = []
     for record in out.split("\0"):
         meta, tab, path = record.partition("\t")
         parts = meta.split()
-        if not tab or len(parts) != 4 or parts[0] not in BLOB_MODES or parts[1] != "blob":
+        if not tab or len(parts) != 4 or not _hex(parts[2], 40):
             continue
-        if not _hex(parts[2], 40) or not parts[3].isdigit():
-            continue
-        found.append((path, parts[2], int(parts[3])))
+        regular = parts[0] in BLOB_MODES and parts[1] == "blob" and parts[3].isdigit()
+        found.append((regular, path, parts[2], int(parts[3]) if regular else -1))
     return found
+
+
+def _tree(top: str, base: str) -> list[tuple[str, str, int]] | None:
+    # 0256: (path, blob id, size) of each regular file at base; links and submodules are dropped.
+    entries = tree_entries(top, base)
+    if entries is None:
+        return None
+    return [(path, blob, size) for regular, path, blob, size in entries if regular]
 
 
 def _skipped(path: str, top: str, excluded: tuple[str, ...]) -> bool:
@@ -353,24 +363,43 @@ def first_error(stderr: str, secrets: list[str]) -> str:
     return _printable(pick)[:ERROR_MAX] or "no error text"
 
 
-def _run(argv: list[str], cwd: str, env: dict[str, str], timeout: float) -> tuple[int, str]:
+def _address_cap(limit: int) -> None:
+    # 0265: the child and every provider it starts inherit one address-space ceiling.
+    resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+
+
+def run_terraform(
+    argv: list[str],
+    cwd: str,
+    env: dict[str, str],
+    timeout: float,
+    keep_stdout: bool = False,
+    memory: int = 0,
+) -> tuple[int, str, str]:
     # 0256: argv as a list, no shell; on a timeout the whole process group is killed.
     proc = subprocess.Popen(
         argv,
+        preexec_fn=(lambda: _address_cap(memory)) if memory else None,
         cwd=cwd,
         env=env,
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE if keep_stdout else subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
     try:
-        _, err = proc.communicate(timeout=timeout)
+        out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
-        return -1, f"Error: terraform did not finish within {timeout:g} seconds"
-    return proc.returncode, err.decode("utf-8", errors="replace")
+        return -1, "", f"Error: terraform did not finish within {timeout:g} seconds"
+    decoded = (out or b"")[:OUTPUT_MAX].decode("utf-8", errors="replace")
+    return proc.returncode, decoded, err[:OUTPUT_MAX].decode("utf-8", errors="replace")
+
+
+def _run(argv: list[str], cwd: str, env: dict[str, str], timeout: float) -> tuple[int, str]:
+    code, _, err = run_terraform(argv, cwd, env, timeout)
+    return code, err
 
 
 def terraform_path(repo: str, search: str) -> str | None:

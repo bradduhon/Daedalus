@@ -1029,45 +1029,40 @@ def _features(repo: Path, block: dict[str, object] | None) -> None:
         {"terraform_format": None, "terraform_validate": False},
     ],
 )
-def test_terraform_validate_refused_unless_the_switch_is_true(
+def test_the_auditor_runs_no_terraform_validate_whatever_the_switch(
     repo_cwd: Path, block: dict[str, object] | None
 ) -> None:
+    # 0265, issue 118: validate would start the planted program; the run validates instead.
     module = _plant_provider(repo_cwd)
     _features(repo_cwd, block)
     for command in ("terraform validate", f"terraform -chdir={module} validate"):
         reason = _tf_call(repo_cwd, command)
-        assert reason is not None, command
-        assert reason.startswith("checks.terraform_validate is not true"), reason
-        assert reason.count("Next:") == 1 and VALIDATE_NEXT in reason.split("Next:")[1], reason
+        assert _starts(reason, load(HOOK).R_TERRAFORM_RUN_VALIDATES), command
+        assert not decide(_tf_payload(repo_cwd, command), Config()).allow, command
     # 0158: fmt -check stays under checks.terraform_format alone.
     for command in ("terraform fmt -check", f"terraform -chdir={module} fmt -check"):
         assert _tf_call(repo_cwd, command) is None, command
 
 
-def test_terraform_validate_admitted_when_the_switch_is_true(repo_cwd: Path) -> None:
-    module = _plant_provider(repo_cwd)
-    for block in (
-        {"terraform_validate": True},
-        {"terraform_format": True, "terraform_validate": True},
-    ):
-        _features(repo_cwd, block)
-        for command in ("terraform validate", f"terraform -chdir={module} validate"):
-            assert _tf_call(repo_cwd, command) is None, (block, command)
-            assert first_deny(_tf_payload(repo_cwd, command), Config()) is None, command
+def test_the_auditor_refusal_names_the_runs_validate_and_a_next_line() -> None:
+    reason = load(HOOK).R_TERRAFORM_RUN_VALIDATES
+    assert "staged copy" in reason and "in your brief" in reason
+    assert reason.count("Next:") == 1 and "terraform fmt" in reason.split("Next:")[1]
+    assert load(HOOK).TERRAFORM_FORMS == (("fmt", "-check"),)
 
 
-def test_terraform_tools_off_outranks_the_validate_switch(repo_cwd: Path) -> None:
+def test_terraform_tools_off_outranks_the_format_check(repo_cwd: Path) -> None:
     module = _plant_provider(repo_cwd)
     _features(repo_cwd, {"terraform_format": False, "terraform_validate": True})
-    for command in ("terraform validate", f"terraform -chdir={module} fmt -check"):
+    for command in ("terraform fmt -check", f"terraform -chdir={module} fmt -check"):
         reason = _tf_call(repo_cwd, command)
         assert reason is not None and reason.startswith("checks.terraform_format is false")
 
 
-def test_terraform_validate_refused_on_a_non_boolean_switch(repo_cwd: Path) -> None:
+def test_terraform_format_refused_on_a_non_boolean_switch(repo_cwd: Path) -> None:
     _plant_provider(repo_cwd)
     _features(repo_cwd, {"terraform_validate": "true"})
-    reason = _tf_call(repo_cwd, "terraform validate")
+    reason = _tf_call(repo_cwd, "terraform fmt -check")
     assert reason is not None and reason.startswith("the service manifest could not be read")
 
 
@@ -1077,35 +1072,38 @@ def _wrapped_tf(tmp_path: Path, block: dict[str, object] | None) -> tuple[Path, 
     return repo, wt, f"{shell.CONFINE_PATH} --unit {wt} --"
 
 
-@pytest.mark.parametrize(
-    "inner",
-    [
-        "terraform validate",
-        "terraform fmt -check",
-        "terraform -chdir={wt} validate",
-        TERRAFORM_INIT_FORM.replace("{module}", "{wt}"),
-    ],
-)
-def test_wrapped_terraform_passes_both_checks_when_validate_is_on(
-    tmp_path: Path, inner: str
-) -> None:
+def test_wrapped_terraform_passes_both_checks_for_the_format_check(tmp_path: Path) -> None:
     # 0158, 0164: the kernel wrapper's form passes the terraform class and the reviewer's chain.
-    repo, wt, wrap = _wrapped_tf(tmp_path, {"terraform_validate": True})
-    command = f"{wrap} {inner.format(wt=wt)}"
+    repo, _, wrap = _wrapped_tf(tmp_path, {"terraform_validate": True})
+    command = f"{wrap} terraform fmt -check"
     assert _tf_call(repo, command) is None
     assert first_deny(_tf_payload(repo, command), Config()) is None
 
 
-@pytest.mark.parametrize("block", [None, {}, {"terraform_validate": False}])
-def test_wrapped_validate_waits_for_its_switch_and_fmt_check_does_not(
-    tmp_path: Path, block: dict[str, object] | None
+@pytest.mark.parametrize(
+    "block", [None, {}, {"terraform_validate": False}, {"terraform_validate": True}]
+)
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "terraform validate",
+        "terraform -chdir={wt} validate",
+        TERRAFORM_INIT_FORM.replace("{module}", "{wt}"),
+        "terraform -chdir={wt} init",
+        "terraform init",
+    ],
+)
+def test_the_auditor_runs_no_validate_or_init_bare_or_wrapped(
+    tmp_path: Path, block: dict[str, object] | None, inner: str
 ) -> None:
-    # 0159: the bare form keeps its deviation row; the wrapped form meets the same switch.
+    # 0265, issue 118: every spelling the class's parser admits meets the run's-validate refusal.
     repo, wt, wrap = _wrapped_tf(tmp_path, block)
-    init = f"{wrap} {TERRAFORM_INIT_FORM.format(module=wt)}"
-    for command in ("terraform validate", f"{wrap} terraform validate", init):
+    want = load(HOOK).R_TERRAFORM_RUN_VALIDATES
+    form = inner.format(wt=wt)
+    for command in (form, f"{wrap} {form}"):
         reason = _tf_call(repo, command)
-        assert reason is not None and reason.startswith("checks.terraform_validate is not true")
+        admitted = jail.admitted(command, "auditor", str(repo))
+        assert _starts(reason, want) or (not admitted and reason is not None), command
         assert not decide(_tf_payload(repo, command), Config()).allow, command
     assert _tf_call(repo, f"{wrap} terraform fmt -check") is None
 
@@ -1114,12 +1112,11 @@ def test_wrapped_validate_waits_for_its_switch_and_fmt_check_does_not(
 def test_terraform_init_is_refused_bare_and_its_near_misses_wrapped_too(
     tmp_path: Path, command: str
 ) -> None:
-    # 184: the init form runs only wrapped; a near miss of its shape is refused either way.
+    # 184, 0265: the auditor runs no init form; a near miss of its shape is refused either way.
     repo, wt, wrap = _wrapped_tf(tmp_path, {"terraform_validate": True})
     bare = command.format(module=wt)
-    forms = [bare] if command == TERRAFORM_INIT_FORM else [bare, f"{wrap} {bare}"]
-    for form in forms:
-        assert _starts(_tf_call(repo, form), load(HOOK).R_TERRAFORM), form
+    for form in (bare, f"{wrap} {bare}"):
+        assert _tf_call(repo, form) is not None, form
         assert not decide(_tf_payload(repo, form), Config()).allow, form
 
 
@@ -1152,9 +1149,10 @@ def test_the_wrapper_admits_only_terraform_for_the_auditor_and_nothing_for_other
     repo, wt, wrap = _wrapped_tf(tmp_path, {"terraform_validate": True})
     for inner in ("python3 -c 1", "bash -c ls", f"cat {wt}/README.md", "terraform plan"):
         assert not decide(_tf_payload(repo, f"{wrap} {inner}"), Config()).allow, inner
-    assert decide(_tf_payload(repo, f"{wrap} terraform validate"), Config()).allow
+    assert decide(_tf_payload(repo, f"{wrap} terraform fmt -check"), Config()).allow
+    assert not decide(_tf_payload(repo, f"{wrap} terraform validate"), Config()).allow
     for agent in ("verifier", "releaser", "orchestrator"):
-        hook_input = _tf_payload(repo, f"{wrap} terraform validate")
+        hook_input = _tf_payload(repo, f"{wrap} terraform fmt -check")
         hook_input["agent_type"] = agent
         assert not decide(hook_input, Config()).allow, agent
 

@@ -1546,16 +1546,22 @@ R_TSC = (
 R_TERRAFORM_MUTATE = (
     "terraform apply, destroy, import, state, taint, untaint, force-unlock and refresh change "
     "infrastructure or state and stay with the operator, bare or under the kernel wrapper "
-    "(0158). Next: run `terraform validate` or `terraform fmt -check`, or yield the change to "
-    "the operator."
+    "(0158). Next: run `terraform fmt -check`, or yield the change to the operator."
 )
 R_TERRAFORM_OPERATOR = (
-    "a coder runs only `terraform validate` and `terraform fmt -check`, the latter with "
-    "-recursive and one folder inside your unit worktree at most, and `terraform "
-    "-chdir=<folder> init -backend=false -input=false -lockfile=readonly` (184), each under the "
-    "kernel wrapper; plan, every other init form and every other subcommand or fmt form stay "
-    "with the operator (0158, 0164). Next: send one of those three forms, or yield the command "
-    "to the operator."
+    "a coder runs only `terraform fmt -check`, with -recursive and one folder inside your unit "
+    "worktree at most, and `terraform -chdir=<folder> init -backend=false -input=false "
+    "-lockfile=readonly` (184), each under the kernel wrapper; the run validates your unit "
+    "after you hand it in (0265); plan, every other init form and every other subcommand or "
+    "fmt form stay with the operator (0158, 0164). Next: send one of those two forms, or yield "
+    "the command to the operator."
+)
+# 0265: the wrapper refuses the sockets terraform uses to talk to providers, so validate fails.
+R_TERRAFORM_VALIDATE_RUN = (
+    "a coder does not run `terraform validate`: the run validates your unit outside the kernel "
+    "wrapper after you hand it in, and a failure comes back to you as a fix round (0265). "
+    "Next: run `terraform fmt -check` and the init form if you need them, commit, and hand "
+    "the unit in."
 )
 
 
