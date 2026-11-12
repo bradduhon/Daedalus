@@ -5,6 +5,7 @@
 # writes <dir>/map.md and <dir>/map.json: imports with fan-in, test coverage, readers and writers
 # of shared records, plan ownership and near-duplicate blocks. Stdlib only and deterministic: no
 # clock, no absolute path, every list sorted. --check rebuilds and exits 1 when either file differs.
+# 0261: --check on the active run's own map folder writes a stale map anew and exits 0 instead.
 from __future__ import annotations
 
 import argparse
@@ -24,8 +25,9 @@ from pathlib import Path
 from typing import TypedDict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import atomic  # noqa: E402
+from lib import atomic, git, train_state  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
+from lib.briefs import SCRATCH  # noqa: E402
 from lib.config import ConfigError, load_config, resolve_excluded_roots  # noqa: E402
 from lib.plan_record import PlanError, _covers, load  # noqa: E402
 from lib.project_keys import config_keys, manifest_keys  # noqa: E402
@@ -86,6 +88,11 @@ R_PLAN = (
 R_ROOTS = "The map could not resolve the project's excluded roots, so nothing was written: {error}"
 R_ROOTS_NEXT = (
     "\nNext: fix git_excluded_folders in .claude/daedalus/config.json, then rerun the map."
+)
+R_REBUILT = "map rebuilt: {path} from tip {tip} sha256={sha}"
+R_WRITE = (
+    "The map could not be written to {out} ({error}). "
+    "Next: make {out} a writable folder inside the repository, then rerun the same map command."
 )
 
 
@@ -746,17 +753,37 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _check(out: Path, texts: dict[str, str]) -> int:
+def _stale(out: Path, texts: dict[str, str]) -> str | None:
     for name, text in texts.items():
         path = out / name
         if not path.is_file():
-            print(R_MISSING.format(path=path))
-            return 1
+            return R_MISSING.format(path=path)
         if path.read_text(encoding="utf-8") != text:
-            print(R_STALE.format(path=path))
-            return 1
-    print(f"OK map: {out / MAP_JSON} is current sha256={_sha256(texts[MAP_JSON])}")
-    return 0
+            return R_STALE.format(path=path)
+    return None
+
+
+def run_train(repo: Path, out: Path) -> str | None:
+    # 0261: the active run's id when --out is that run's own map folder, else None.
+    train_id = train_state.active_train(repo)
+    if train_id is None or (repo / SCRATCH / train_id / "map").resolve() != out:
+        return None
+    return train_id
+
+
+def _recorded_plan(repo: Path, train_id: str) -> Path | None:
+    # 0261: the plan the run's state recorded, so a check without --plan keeps the ownership.
+    path = train_state.record(train_state.load(repo, train_id), train_state.PLAN).get("path")
+    return Path(path) if isinstance(path, str) and path else None
+
+
+def _tip(repo: Path) -> str:
+    try:
+        done = git.run(["rev-parse", "--verify", "--quiet", "HEAD"], repo)
+    except (OSError, git.GitTimeout):
+        return "unknown"
+    tip = done.stdout.strip()
+    return tip if done.returncode == 0 and tip else "unknown"
 
 
 def main(argv: list[str]) -> int:
@@ -766,8 +793,15 @@ def main(argv: list[str]) -> int:
     if out == repo or not out.is_relative_to(repo):
         print(R_OUT.format(out=args.out, repo=args.repo))
         return 2
+    train_id = run_train(repo, out) if args.check else None
+    plan = args.plan
     try:
-        data = build(repo, out, args.plan)
+        if train_id is not None and plan is None:
+            plan = _recorded_plan(repo, train_id)
+        data = build(repo, out, plan)
+    except train_state.TrainStateError as exc:
+        print(exc)
+        return 2
     except PlanError as exc:
         print(R_PLAN.format(error=exc))
         return 2
@@ -775,14 +809,28 @@ def main(argv: list[str]) -> int:
         # 99: the cause's own Next line wins; the generic one only fills a gap.
         print(R_ROOTS.format(error=exc) + ("" if "Next:" in str(exc) else R_ROOTS_NEXT))
         return 2
-    texts = {MAP_JSON: render_json(data), MAP_MD: render_md(data, args.plan is not None)}
+    texts = {MAP_JSON: render_json(data), MAP_MD: render_md(data, plan is not None)}
+    sha = _sha256(texts[MAP_JSON])
     if args.check:
-        return _check(out, texts)
-    out.mkdir(parents=True, exist_ok=True)
-    for name, text in texts.items():
-        atomic.write_atomic(out / name, text)
+        stale = _stale(out, texts)
+        if stale is None:
+            print(f"OK map: {out / MAP_JSON} is current sha256={sha}")
+            return 0
+        if train_id is None:
+            print(stale)
+            return 1
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        for name, text in texts.items():
+            atomic.write_atomic(out / name, text)
+    except OSError as exc:
+        print(R_WRITE.format(out=out, error=exc))
+        return 2
+    if args.check:
+        print(R_REBUILT.format(path=out / MAP_JSON, tip=_tip(repo), sha=sha))
+        return 0
     print(f"OK map: {out / MAP_MD}")
-    print(f"OK map: {out / MAP_JSON} sha256={_sha256(texts[MAP_JSON])}")
+    print(f"OK map: {out / MAP_JSON} sha256={sha}")
     return 0
 
 

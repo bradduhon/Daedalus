@@ -158,12 +158,14 @@ FILES: tuple[Entry, ...] = (
     Entry(
         "<repo>/<--out>/map.md",
         "scripts/daedalus_map.py:main",
-        "you run daedalus_map.py without --check; the --out folder is created first",
+        "you run daedalus_map.py without --check, or with --check on a stale map in the run's "
+        "map folder (0261); the --out folder is created first",
     ),
     Entry(
         "<repo>/<--out>/map.json",
         "scripts/daedalus_map.py:main",
-        "you run daedalus_map.py without --check",
+        "you run daedalus_map.py without --check, or with --check on a stale map in the run's "
+        "map folder (0261)",
     ),
     Entry(
         "<repo>/service-manifest.json",
