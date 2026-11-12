@@ -246,7 +246,7 @@ def test_the_round_shape_is_gone(phrase: str) -> None:
 
 def test_opening_check_ask_and_choices_run_in_order() -> None:
     step6 = flatten(_step(_text(), 6))
-    order = ("Opening.", "Shape. Check", "Plain check.", "One question.", "Choices.")
+    order = ("Opening.", "Shape. Check", "Question check.", "One question.", "Choices.")
     assert [step6.index(part) for part in order] == sorted(step6.index(part) for part in order)
     head = _text().split("\n---", 1)[0]
     assert "holds a conversation with the operator, one question at a time" in head
@@ -264,9 +264,12 @@ def test_choices_paragraph_offers_no_generic_choice() -> None:
     assert GENERIC.search("`Reply in my words`") and GENERIC.search("`Skip this item`")
 
 
-def test_literacy_is_always_plain_and_never_asked() -> None:
+def test_literacy_follows_the_project_level_and_is_never_asked() -> None:
+    # 0255: two levels; absent or any value but expert reads standard.
     flat = flatten(_text())
-    assert "every question this skill puts to the operator is plain, the planner's text " in flat
+    assert "is written at the level `docs.reading_level` in `<repo>/service-manifest.json` " in flat
+    assert "`standard` when the file or key is absent or holds any value but `expert`" in flat
+    assert "is plain, the planner's text included, whatever" not in flat
     assert "The one exception is a not-viable reply, which prints as written with its " in flat
     assert "never asks the operator how technical to be" in flat
     assert "never the planner's text" not in flat
@@ -328,7 +331,7 @@ def test_skill_names_the_files_it_writes_and_its_stops() -> None:
     text = _text()
     assert (
         "It writes three kinds of file in its folder: the idea board, the handoff brief, and one "
-        "question file per shaping question, which it checks for plain words." in text
+        "question file per shaping question, which it checks for ids and fixed words." in text
     )
     assert "writes no file but" not in text and "Writes no file but" not in text
     head = text.split("\n---", 1)[0]
@@ -341,7 +344,7 @@ def test_skill_names_the_files_it_writes_and_its_stops() -> None:
         "misses its receipt or its nearest version twice",
         "a reply ends off contract",
         "a question reply misses a part of its shape twice",
-        "the plain check fails on the question file itself twice",
+        "the question check fails on the question file itself twice",
         "a hook refuses the planner's write",
         "the plan validator fails twice at hand-off",
     ):

@@ -42,8 +42,8 @@ summary of every unit whose agent changed something, the four public docs, the l
 5. Present tense only for behaviour the diff merged. Name each ruling by its name, with its
    id trailing in parentheses.
 6. Literacy: write at the level the `Literacy:` line names. The orchestrator fills it from
-   the service manifest's `docs.reading_level` key, unless the brief overrides it. `plain` explains every term for
-   a reader new to the project in short sentences. `standard` assumes a reader who has used
+   the service manifest's `docs.reading_level` key, unless the brief overrides it. `plain` is
+   a retired word and reads as `standard`. `standard` assumes a reader who has used
    the plugin. `expert` assumes a reader who maintains it. `profile:<path>` names a voice
    profile file the project declares; read `<path>/<that path>` and follow it.
    `Literacy: none` keeps the register the four docs already use. Strip default model

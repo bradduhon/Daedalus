@@ -52,8 +52,7 @@ def test_setup_writes_both_starter_files_when_missing(repo_cwd: Path) -> None:
     # 0134, 0245: a new manifest is followed by the docs.reading_level examples line.
     assert result.stdout.splitlines() == [
         f"written: {manifest}",
-        'docs.reading_level: null; examples: "plain", "standard", "expert", '
-        '"profile:docs/voice-profile.md"',
+        'docs.reading_level: null; examples: "standard", "expert", "profile:docs/voice-profile.md"',
         f"written: {config}",
     ]
     assert manifest.is_file() and config.is_file()
