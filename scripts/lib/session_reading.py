@@ -178,7 +178,7 @@ class _Excluded:
                 reader.base = _join(reader.base, moved[0].text) if len(moved) == 1 else reader.base
                 continue
             found = self.command(cmd, words, head, family)
-            body = _body(words, head, family) if found is None and depth < _NEST_LIMIT else None
+            body = _body(cmd, head, family) if found is None and depth < _NEST_LIMIT else None
             if body is not None:
                 found = self.script(shparse.parse(body), reader.base, depth + 1)
                 reader.base = base
@@ -241,6 +241,7 @@ class _Reader:
         # 0259: shell variables a literal assignment earlier in the command set.
         self.env = env
         self.depth = depth
+        self.fed = False
 
     def script(self, script: shparse.Script) -> notes.Note | None:
         for cmd, _ in shparse.walk(script):
@@ -254,6 +255,8 @@ class _Reader:
         head = _head(words)
         name = words[head].literal if head < len(words) else None
         family = shell.command_family(name) if name else ""
+        # 0259: xargs feeds the command operands the reading cannot see.
+        self.fed = any(shell.command_family(w.literal or "") == "xargs" for w in words[:head])
         found = self.credential(cmd, family) or self.lookup(cmd, words, head, family)
         if found is not None or not words:
             self.assign(cmd.assignments)
@@ -266,7 +269,7 @@ class _Reader:
             self.declare(words[head + 1 :])
         found = self.family(cmd, words, head, family) or self.protected(cmd, words, head, family)
         if found is None and self.depth < _NEST_LIMIT:
-            body = _body(words, head, family)
+            body = _body(cmd, head, family)
             if body is not None:
                 inner = _Reader(body, self.cwd, self.base, self.released, self.env, self.depth + 1)
                 found = inner.script(shparse.parse(body))
@@ -326,7 +329,7 @@ class _Reader:
     def git(self, toks: list[str], assigns: list[str], named: bool) -> notes.Note | None:
         sub, _, _ = shell._git_split(toks)
         if sub is None:
-            return None
+            return None if not self.fed else self.unread_git()
         tripwire = shell._git_reason([t.replace(_UNREAD, "") for t in toks], assigns)
         if tripwire is not None:
             found = tripwire_note(tripwire, sub, self.released)
@@ -338,11 +341,17 @@ class _Reader:
         if self.released() or sub in _GIT_LOCAL or (not named and sub not in _GIT_PUBLISH):
             return None
         if _UNREAD in sub:
-            what = "This git command may push or merge: the plugin could not read its subcommand"
+            return self.unread_git()
         elif sub in _GIT_PUBLISH:
             return push_note(sub)
         else:
             what = f"This git {sub} may push or merge: it is not a git command the plugin knows"
+        return notes.note(notes.PUSH_OR_MERGE, what)
+
+    def unread_git(self) -> notes.Note | None:
+        if self.released():
+            return None
+        what = "This git command may push or merge: the plugin could not read its subcommand"
         return notes.note(notes.PUSH_OR_MERGE, what)
 
     def tracks_secret(self) -> bool:
@@ -545,11 +554,15 @@ def _head(words: list[Word]) -> int:
     return i
 
 
-def _body(words: list[Word], head: int, family: str) -> str | None:
-    # 0259: the literal script a shell -c, an eval, an env -S or a find -exec runs.
+def _body(cmd: Command, head: int, family: str) -> str | None:
+    # 0259: the literal script a shell -c or stdin text, an eval, an env -S, a find -exec or a
+    # git rebase --exec runs.
+    words = list(cmd.words)
     lits = [w.literal for w in words]
     if family == "find":
         return _find_exec(lits[head + 1 :])
+    if family == "git":
+        return _rebase_exec(lits[head + 1 :])
     if family == "eval":
         rest = lits[head + 1 :]
         return " ".join(lit for lit in rest if lit is not None) if None not in rest else None
@@ -563,7 +576,29 @@ def _body(words: list[Word], head: int, family: str) -> str | None:
         if lit and lit.startswith("-") and not lit.startswith("--") and "c" in lit[1:]:
             at = i + 2 if lits[i + 1] == "--" else i + 1
             return lits[at] if at < len(lits) else None
+    return _stdin_script(cmd)
+
+
+def _stdin_script(cmd: Command) -> str | None:
+    # 0259: a shell reading its script from a literal heredoc or here-string.
+    for redirect in cmd.redirects:
+        doc = redirect.heredoc
+        if redirect.op in ("<<", "<<-") and isinstance(doc, shparse.Heredoc):
+            return doc.body
+        if redirect.op == "<<<":
+            return redirect.target.literal
     return None
+
+
+def _rebase_exec(lits: list[str | None]) -> str | None:
+    # 0259: the command a git rebase -x or --exec runs after each commit.
+    runs: list[str] = []
+    for i, lit in enumerate(lits):
+        if lit in ("-x", "--exec") and i + 1 < len(lits) and lits[i + 1] is not None:
+            runs.append(str(lits[i + 1]))
+        elif lit is not None and lit.startswith("--exec="):
+            runs.append(lit.split("=", 1)[1])
+    return "\n".join(runs) if runs else None
 
 
 def _find_exec(lits: list[str | None]) -> str | None:
