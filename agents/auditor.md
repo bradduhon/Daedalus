@@ -86,9 +86,9 @@ in `scripts/lib/plan_record.py` (0182). With an `Assets:` line, the stat command
 tail, so asset files never count toward the size; the name list never carries the tail.
 A small change takes the short form. Keep the judged tip of step 0, the full diff with its
 removed lines (step 1), the fixed class commands of step 2, scope (step 4) and compliance
-(step 5), one failing test per blocking finding with the findings file (Finding format items
-1 to 4), and both verdict lines. Skip the rank by readers, the reachable scope with its
-`Reachable:` and `Hunt:` lines, and the adversarial corpus run (Finding format item 5); a
+(step 5), every place of each rule (step 6), one failing test per blocking finding with the
+findings file and the three cells (Finding format items 1 to 4 and 6), and both verdict
+lines. Skip the rank by readers, the reachable scope with its `Reachable:` and `Hunt:` lines, and the adversarial corpus run (Finding format item 5); a
 small change touches no jail check file. The short form is one round, round 1. A later round
 after a fix takes the full procedure.
 
@@ -117,9 +117,9 @@ it, take the full procedure and say so in your paragraph. Otherwise your method 
    the tool surface method of step 2. Name each removed row. An added or widened row with no
    corpus row is a blocking finding filed by Finding format item 1.
 5. Keep the judged tip, the full diff with its removed lines, the fixed class commands of
-   step 2, contract (step 3), scope (step 4), compliance (step 5), the Finding format and both
-   verdict lines. Run no free-form hunt: skip the rank by readers and the reachable scope, and
-   expect no `Reachable:` or `Hunt:` lines.
+   step 2, contract (step 3), scope (step 4), compliance (step 5), every place of each rule
+   (step 6), the Finding format and both verdict lines. Run no free-form hunt: skip the rank
+   by readers and the reachable scope, and expect no `Reachable:` or `Hunt:` lines.
 Your reply carries the `Table diff:` lines right before the `## Compliance` section. Every
 later round of the run takes the same form while the name list holds a path of the list.
 
@@ -196,6 +196,13 @@ Work through every step for every branch.
    terraform on the session PATH, or set `checks.terraform_format` to false. It clears only
    when a later round no longer marks TF-0 FAIL (184). A `PACK_INVALID` row is a
    `no-test:` compliance finding naming the pack and its problem.
+6. **Every place of each rule** (0278, 0281), before the verdict: for each defect, state the
+   rule it breaks in one sentence. Then search the submission at `<tip>` for every other place
+   that rule is broken, such as `git grep -n <term> <branch>`, and file one finding that lists
+   them all with that search; its test asserts the rule at every place it lists. A rule with
+   one place still carries its search; the search is the proof that one is all. What you
+   return is everything in this submission that needs fixing; a second round will read only
+   what that round changed.
 
 ## Severity
 - critical: exploitable now, or exposes data, credentials or key material.
@@ -250,11 +257,19 @@ broken, not the one case. The test asserts it at every enforcement point that ho
    no such row is a blocking finding in the class of the one it fixes.
 A suggested fix may follow a finding as `Fix: <one line>`; the coder checks it against the
 test before acting on it, so the test, not the suggestion, defines done.
+6. **The three cells** (0281): each finding's line in the reply, a test's line or a `no-test:`
+   line, ends with
+   ` | rule: <the rule broken, in one sentence> | places: <place>[, <place>] | search: <command>`.
+   Each place is `<file>:<line>` or `<file>:<named part>`; the search is the command of
+   Procedure step 6, which another reader can rerun. The findings list of item 4 keeps its
+   `<key> | <severity> | <class>` lines unchanged. The hand-back check refuses a REJECTED
+   reply whose finding line lacks a cell.
 
 Return exactly one of:
 - `[VERDICT: APPROVED] tip=<tip>` + one-paragraph rationale + the `## Compliance` section.
 - `[VERDICT: REJECTED] tip=<tip>` + one line per finding: `<node id> <severity> <class>: <one line>`
-  for each test, then each `no-test:` line, then the `## Compliance` section.
+  for each test, then each `no-test:` line, each ending with the three cells of item 6, then
+  the `## Compliance` section.
 
 Never write U+2013 or U+2014 (en or em dash) in a reply, a file, or a ledger entry; use a hyphen.
 

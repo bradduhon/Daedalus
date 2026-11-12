@@ -459,3 +459,107 @@ def test_a_link_out_of_the_bound_unit_worktree_is_refused(tmp_path: Path) -> Non
         handback_check.judge(_stop(_files("a.py,out/b.py"), cwd=str(repo), agent_id="a2")) is None
     )
     assert handback_check.judge(_stop(_files("a.py,in/b.py"), cwd=str(repo))) is None
+
+
+# 0281: a failing judge verdict whose finding lacks its rule, a place or its search is refused.
+CELLS = " | rule: a refusal names its rule | places: scripts/x.py:4 | search: git grep -n refuse"
+TIP = "tip=" + "a" * 40
+VERIFIER_KEY = "Unit worktree: /work/repo/.claude/worktrees/u1"
+
+
+def _refuted(*rows: str) -> str:
+    line = "[VERDICT: REFUTED] " + "; ".join(rows)
+    return _reply(line, VERIFIER_KEY, "| claim | verdict |", "corrected=0", line)
+
+
+def _rejected(*findings: str) -> str:
+    head = f"[VERDICT: REJECTED] {TIP}"
+    return _reply(head, *findings, "## Compliance", "none", head)
+
+
+ROW = "code | req 1 | MISSING | none | req 1"
+NODE = "audit/round1/test_scope_x.py::test_y high scope: the write lands"
+
+
+@pytest.mark.parametrize("event", [_stop, _handback])
+def test_a_finding_with_one_place_and_its_search_passes(event: object) -> None:
+    assert callable(event)
+    assert handback_check.judge(event(_refuted(ROW + CELLS), "daedalus:verifier")) is None
+    assert handback_check.judge(event(_rejected(NODE + CELLS), "daedalus:auditor")) is None
+    doc = " | rule: a step names its command | places: docs/guide.md:Install | search: rg -n step"
+    assert handback_check.judge(event(_refuted(ROW + doc), "verifier")) is None
+
+
+@pytest.mark.parametrize(
+    ("cells", "field"),
+    [
+        (" | rule: r | places: scripts/x.py:4", "no search cell"),
+        (" | rule: r | search: git grep -n r", "no places cell"),
+        (" | places: scripts/x.py:4 | search: git grep -n r", "no rule cell"),
+    ],
+)
+def test_a_verifier_row_without_a_cell_is_refused(cells: str, field: str) -> None:
+    reply = _refuted(ROW + CELLS, ROW + cells)
+    got = handback_check.judge(_handback(reply, "daedalus:verifier"))
+    assert got is not None and "\n" not in got
+    assert got.startswith(f"Daedalus hand-back check: row 2 '{ROW + cells}' has {field}.")
+    assert got.count("Next:") == 1
+    assert got.endswith("rows joined by `; ` and no other `;`.")
+    assert "row 1" not in got
+
+
+@pytest.mark.parametrize(
+    ("cells", "field"),
+    [
+        (" | rule: r | places: scripts/x.py:4", "no search cell"),
+        (" | rule: r | search: git grep -n r", "no places cell"),
+        (" | places: scripts/x.py:4 | search: git grep -n r", "no rule cell"),
+    ],
+)
+def test_an_auditor_finding_without_a_cell_is_refused(cells: str, field: str) -> None:
+    no_test = "no-test: daedalus/t a.py:3 medium contract: drift; reason: prose" + cells
+    got = handback_check.judge(_stop(_rejected(NODE + CELLS, no_test), "daedalus:auditor"))
+    assert got is not None
+    assert f"finding 2 '{no_test}' has {field}." in got
+    assert "finding 1" not in got and got.count("Next:") == 1
+
+
+def test_every_finding_lacking_a_cell_is_named() -> None:
+    got = handback_check.judge(_stop(_refuted(ROW, ROW + CELLS, ROW), "verifier"))
+    assert got is not None
+    assert "row 1 " in got and "row 3 " in got and "row 2 " not in got
+    assert "no rule cell and no places cell and no search cell" in got
+
+
+def test_a_failing_verdict_with_no_readable_finding_is_refused() -> None:
+    bare = "[VERDICT: REFUTED]"
+    got = handback_check.judge(_stop(_reply(bare, VERIFIER_KEY, bare), "verifier"))
+    assert got is not None and "holds no row" in got
+    semi = handback_check.judge(_stop(_refuted(ROW + CELLS.replace("refuse", "a;b")), "verifier"))
+    assert semi is not None and "holds no row" in semi
+    prose = handback_check.judge(_stop(_rejected("The write lands."), "auditor"))
+    assert prose is not None and "lists no finding line" in prose
+
+
+def test_passing_verdicts_and_other_replies_are_unchanged() -> None:
+    verified = "[VERDICT: VERIFIED] claims=3"
+    assert handback_check.judge(_stop(_reply(verified, VERIFIER_KEY, verified), "verifier")) is None
+    approved = f"[VERDICT: APPROVED] {TIP}"
+    reply = _reply(approved, "Clean.", "## Compliance", "none", approved)
+    assert handback_check.judge(_stop(reply, "auditor")) is None
+    assert (
+        handback_check.judge(_stop(_reply("[ROWS] n=1", "row", "[ROWS] n=1"), "verifier")) is None
+    )
+    # 0281: the cells bind judges only; a coder's REFUTED-looking text is judged by its receipts.
+    assert handback_check.judge(_stop(_refuted(ROW), "orchestrator")) is None
+
+
+def test_the_script_blocks_a_judge_in_a_train(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / TRAIN_MARKER).parent.mkdir(parents=True)
+    (tmp_path / TRAIN_MARKER).write_text("20261026-002310\n", encoding="utf-8")
+    stop = _stop(_refuted(ROW), "daedalus:verifier", cwd=str(tmp_path))
+    out = json.loads(_run(json.dumps(stop)).stdout)
+    assert out["decision"] == "block" and out["reason"] == handback_check.judge(stop)
+    whole = _stop(_rejected(NODE + CELLS), "daedalus:auditor", cwd=str(tmp_path))
+    assert _run(json.dumps(whole)).stdout == ""

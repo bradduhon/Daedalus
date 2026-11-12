@@ -120,6 +120,12 @@ mode section instead. A prompt whose first line is `ROWS MODE.` follows the Rows
    a line unchanged, carries the grep or diff that proves absence, such as
    `git -C <unit worktree> grep -n <term> <branch>`, pasted with its empty result.
    "Could not find" is ASSUMED, never MATCH.
+8. Every place of each rule (0278, 0281), before the verdict: for each claim you refute, state
+   the rule it breaks in one sentence. Then search the submission for every other place that
+   rule is broken, such as `git -C <unit worktree> grep -n <term> <branch>`, and return one row
+   that lists them all with that search. A rule with one place still carries its search; the
+   search is the proof that one is all. What you return is everything in this submission that
+   needs fixing; a second round will read only what that round changed.
 
 ## Claims mode
 A prompt whose first line is `CLAIMS MODE.` lists one `Claim: <output path>:<line> <claim>`
@@ -154,8 +160,10 @@ in claims mode every claim checked this round. The line directly above the closi
 line reads `corrected=<k>`, the number of receipts step 5 or step 6 corrected, `corrected=0`
 when none. A correction is a table row `corrected | <receipt> | <verdict> | <branch quote> | <receipt quote>`
 and never enters the verdict line (0127). REFUTED needs at least one `code` or `scope` row.
-A refuted row is `<class> | <claim> | <verdict> | <branch quote> | <brief quote>`, where
-`<class>` is `code` or `scope`, rows joined by `; `.
+A refuted row is `<class> | <claim> | <verdict> | <branch quote> | <brief quote> | rule: <the rule broken, in one sentence> | places: <place>[, <place>] | search: <command>`,
+where `<class>` is `code` or `scope`, each place is `<file>:<line>` or `<file>:<named part>`,
+and the search is the step 8 command another reader can rerun; rows joined by `; `, with no
+other `;` in a row. The hand-back check refuses a REFUTED reply whose row lacks a cell (0281).
 - `[VERDICT: VERIFIED] claims=<n>` then `Unit worktree: <path>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: VERIFIED] claims=<n>`
 - `[VERDICT: REFUTED] <rows>` then `Unit worktree: <path>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: REFUTED] <rows>`
 - `[ROWS] n=<count>` then `Unit worktree: <path>` then `<one row per line>` then `[ROWS] n=<count>`

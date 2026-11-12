@@ -4,8 +4,9 @@
 # RCP, 0128: the check on a coder's COMPLETE reply, before any verifier runs. It reads the
 # SubagentStop reply and, by the operator's pick 4 of train 20261026-002310, the message of a
 # PreToolUse SubagentHandback call. Pin RCP -> VER: the receipts block sits directly above the
-# COMPLETE line. A yield, another agent's reply and an empty reply pass; a check that cannot run
-# never blocks.
+# COMPLETE line. 0281: a verifier's REFUTED or an auditor's REJECTED reply carries the rule,
+# places and search cells on every finding. A yield, another agent's reply and an empty reply
+# pass; a check that cannot run never blocks.
 from __future__ import annotations
 
 import json
@@ -106,6 +107,56 @@ def receipts_problem(reply: str, root: Path | None = None) -> str | None:
     return files_problem(status, root if root is not None else Path.cwd())
 
 
+VERIFIER, AUDITOR = "verifier", "auditor"
+COMPLIANCE = "## Compliance"
+
+
+def _judge_next(agent: str) -> str:
+    from lib.audit_rounds import CELLS
+
+    if agent == VERIFIER:
+        return (
+            f"end each row of the REFUTED line with {CELLS}, rows joined by `; ` and no other `;`"
+        )
+    return (
+        "write one line per finding, `<node id> <severity> <class>: <one line>` or "
+        f"`no-test: <branch> <file>:<line> <severity> <class>: <what is wrong>`, each ending with "
+        f"{CELLS}"
+    )
+
+
+def findings_problem(agent: str, reply: str) -> str | None:
+    # 0281: a failing verdict whose finding lacks its rule, a place or its search is refused.
+    from lib.audit_proof import VERDICT_REJECTED
+    from lib.audit_rounds import cell_problems, reply_finding
+    from lib.coder_model import REFUTED_PREFIX
+    from lib.workspace import refuted_rows
+
+    lines = [line.strip() for line in reply.splitlines() if line.strip()]
+    last = lines[-1] if lines else ""
+    if agent == VERIFIER and last.startswith(REFUTED_PREFIX):
+        rows = refuted_rows(last)
+        if not rows:
+            return "the REFUTED line holds no row, or a row with a `;` of its own"
+        named = [(f"row {n}", row) for n, row in enumerate(rows, start=1)]
+    elif agent == AUDITOR and last.startswith(VERDICT_REJECTED):
+        body = lines[1:-1]
+        body = body[: body.index(COMPLIANCE)] if COMPLIANCE in body else body
+        found = [line.removeprefix("- ") for line in body if reply_finding(line)]
+        if not found:
+            return "the REJECTED reply lists no finding line"
+        named = [(f"finding {n}", line) for n, line in enumerate(found, start=1)]
+    else:
+        return None
+    problems: list[str] = []
+    for name, row in named:
+        lacks = cell_problems(row)
+        if lacks:
+            shown = row if len(row) <= SHOWN_CHARS else row[:SHOWN_CHARS] + "..."
+            problems.append(f"{name} {shown!r} has {' and '.join(lacks)}")
+    return "; ".join(problems) or None
+
+
 def _agent(hook_input: dict[str, object]) -> str:
     # 6.1: a stop without agent_type takes the newest SubagentStart type for its agent_id.
     from lib import audit, hook_io
@@ -158,7 +209,13 @@ def _unit_root(hook_input: dict[str, object]) -> Path | None:
 
 def judge(hook_input: dict[str, object]) -> str | None:
     reply = _reply(hook_input)
-    if not isinstance(reply, str) or not reply or _agent(hook_input) != CODER:
+    agent = _agent(hook_input) if isinstance(reply, str) and reply else ""
+    if agent in (VERIFIER, AUDITOR):
+        found = findings_problem(agent, str(reply))
+        if found is None:
+            return None
+        return f"Daedalus hand-back check: {found}. Next: {_judge_next(agent)}."
+    if not isinstance(reply, str) or not reply or agent != CODER:
         return None
     problem = receipts_problem(reply, _unit_root(hook_input))
     if problem is None:

@@ -112,10 +112,35 @@ def test_refuted_rows_are_code_or_scope_and_a_deviation_excuses_scope() -> None:
     )
     contract = _body("## Status contract", "\0")
     assert (
-        "A refuted row is `<class> | <claim> | <verdict> | <branch quote> | <brief quote>`"
-        in contract
+        "A refuted row is `<class> | <claim> | <verdict> | <branch quote> | <brief quote> | "
+        "rule: <the rule broken, in one sentence> | places: <place>[, <place>] | "
+        "search: <command>`" in contract
     )
+    assert "each place is `<file>:<line>` or `<file>:<named part>`" in contract
     assert "REFUTED needs at least one `code` or `scope` row." in contract
+
+
+WHOLE_LIST = (
+    "What you return is everything in this submission that needs fixing; a second round will "
+    "read only what that round changed."
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "heading"), [("verifier", "## Claims mode"), ("auditor", "## Severity")]
+)
+def test_each_judge_searches_every_place_before_the_verdict(name: str, heading: str) -> None:
+    # 0278, 0281: one step before the verdict states the rule and searches for every place.
+    text = " ".join((VERIFIER.parent / f"{name}.md").read_text(encoding="utf-8").split())
+    procedure = text.split("## Procedure", 1)[1].split(heading, 1)[0]
+    step = procedure.split("Every place of each rule", 1)[1]
+    assert "state the rule it breaks in one sentence" in step
+    assert "search the submission" in step and "every other place" in step
+    assert "lists them all with that search" in step
+    assert "A rule with one place still carries its search" in step
+    assert WHOLE_LIST in step
+    for word in (" diff", " code ", " function"):
+        assert word not in step, word
 
 
 def test_wrong_receipts_are_corrected_and_counted_above_the_closing_line() -> None:
