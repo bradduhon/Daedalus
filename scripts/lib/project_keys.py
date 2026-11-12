@@ -1146,7 +1146,7 @@ OVERLAPS: tuple[Overlap, ...] = (
         "A project's config can hold its own copy of any personal preference. A value set "
         "there replaces your personal value for that project only, and the rest still come "
         "from your personal file. Nothing acts on those values yet.",
-        (("scripts/lib/operator_file.py", 182, "a key the override sets replaces the base value"),),
+        (("scripts/lib/operator_file.py", 183, "a key the override sets replaces the base value"),),
         "config",
     ),
 )

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from lib import settings_edit
 from lib.redact import redact, redact_text
+from lib.user_keys import is_user_key
 
 GONE = "no longer a setting"
 REFUSED = "this version refuses its value"
@@ -83,7 +84,10 @@ class _Walk:
     def walk(self, path: tuple[str, ...], old: dict[str, object], keys: tuple[str, ...]) -> None:
         pending: dict[str, object] = {}
         for name, value in old.items():
-            if known((*path, name), keys):
+            if is_user_key(name):
+                # 0260: a user key is carried as it stands and never listed.
+                self.doc = settings_edit.with_value(self.doc, (*path, name), value)  # type: ignore[assignment]
+            elif known((*path, name), keys):
                 pending[name] = value
             else:
                 self.dropped.append(Moved((*path, name), value, GONE))

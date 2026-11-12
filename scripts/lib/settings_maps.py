@@ -8,8 +8,24 @@ import copy
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from lib.user_keys import is_user_key
+
 SCHEMA_KEY = "schema"
 Path = tuple[str, ...]
+
+
+class SchemaError(ValueError):
+    pass
+
+
+def _no_user_key(*paths: Path) -> None:
+    # 0260: a user key is never in the key table, so no map row may name one.
+    for path in paths:
+        if any(is_user_key(part) for part in path):
+            raise SchemaError(
+                f"a map row names {'.'.join(path)}, which has a user key in its path. "
+                "Next: report this; a key starting with an underscore is never mapped."
+            )
 
 
 @dataclass(frozen=True)
@@ -17,11 +33,17 @@ class Move:
     old: Path
     new: Path
 
+    def __post_init__(self) -> None:
+        _no_user_key(self.old, self.new)
+
 
 @dataclass(frozen=True)
 class Drop:
     path: Path
     why: str
+
+    def __post_init__(self) -> None:
+        _no_user_key(self.path)
 
 
 @dataclass(frozen=True)
@@ -29,11 +51,17 @@ class Set:
     path: Path
     value: object
 
+    def __post_init__(self) -> None:
+        _no_user_key(self.path)
+
 
 @dataclass(frozen=True)
 class Convert:
     path: Path
     func: str
+
+    def __post_init__(self) -> None:
+        _no_user_key(self.path)
 
 
 Row = Move | Drop | Set | Convert
@@ -66,10 +94,6 @@ FINGERPRINTS: dict[str, dict[int, str]] = {
     "config": {1: "bdc56bcde7810f1a4ecf06bff5dd033f03b5621cde6ba2c5bc097d426a6bd1a0"},
     "operator": {1: "229b044e0ee950a61af48e9a66f2ae3ab6478ee769b1f5dc4a762eb4e47b9fa9"},
 }
-
-
-class SchemaError(ValueError):
-    pass
 
 
 @dataclass(frozen=True)

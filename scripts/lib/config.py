@@ -18,6 +18,7 @@ from lib.operator_file import OperatorError, validate
 from lib.project_root import in_git_work_tree
 from lib.settings_maps import SCHEMA_KEY, current, number_problem
 from lib.train_scope import KNOWN_AGENTS
+from lib.user_keys import USER_KEY_NOTE, unknown_keys, without_user_keys
 
 POLICY_ENGINES = ("cfn-guard", "conftest")
 # D.2.1, 0136: the excluded root kinds this release resolves, and what a gitignore root takes.
@@ -132,7 +133,7 @@ def _group(
     if not isinstance(block, dict):
         raise ConfigError(f"config.json {name} must be an object. Next: write {name} as an object.")
     _refuse_unknown_keys(target, block, keys, f"{name} ")
-    return block
+    return without_user_keys(block)
 
 
 def _max_builders(raw: dict[str, object]) -> int:
@@ -179,11 +180,11 @@ def _refuse_unknown_keys(
     target: Path, raw: dict[str, object], keys: tuple[str, ...] = CONFIG_KEYS, where: str = ""
 ) -> None:
     # 0241, 0245: a key off the key table, an old name included, is refused with the valid names.
-    unknown = sorted(str(key) for key in set(raw) - set(keys))
+    unknown = unknown_keys(raw, keys)
     if unknown:
         raise ConfigError(
             f"{target} {where}has unknown keys {unknown} (known: {', '.join(keys)}). "
-            f"Next: delete or correct those keys in {target}, then rerun."
+            f"{USER_KEY_NOTE} Next: delete or correct those keys in {target}, then rerun."
         )
 
 
@@ -199,7 +200,7 @@ def _agent_models(raw: dict[str, object]) -> dict[str, str]:
         )
     agents = KNOWN_AGENTS - {"main"}
     out: dict[str, str] = {}
-    for name, model in value.items():
+    for name, model in without_user_keys(value).items():
         if name not in agents:
             raise ConfigError(
                 f"config.json models.agents names {name!r}, which is not a catalog agent. "
@@ -322,11 +323,11 @@ def _policy(raw: object) -> PolicyDecl:
             "config.json policy needs engine and path. "
             "Next: add the engine and path keys, as docs/project-requirements.md shows."
         )
-    unknown = sorted(str(key) for key in set(raw) - {"engine", "path"})
+    unknown = unknown_keys(raw, ("engine", "path"))
     if unknown:
         raise ConfigError(
             f"config.json policy has unknown keys {unknown} (known: engine, path). "
-            "Next: delete or correct those keys, then rerun."
+            f"{USER_KEY_NOTE} Next: delete or correct those keys, then rerun."
         )
     engine = _require_str(raw, "engine", "policy")
     path = _require_str(raw, "path", "policy")
@@ -346,7 +347,9 @@ def _sources(raw: object) -> tuple[StandardsSource, ...]:
         raise ConfigError("config.json coding_rules must be a list. Next: wrap the entry in [ ].")
     out: list[StandardsSource] = []
     known = ", ".join(RULE_SOURCE_KEYS)
-    for item in raw:
+    for entry in raw:
+        # 0260: the exactly-one-key count ignores user keys.
+        item = without_user_keys(entry) if isinstance(entry, dict) else entry
         if not isinstance(item, dict) or len(item) != 1 or next(iter(item)) not in RULE_SOURCE_KEYS:
             raise ConfigError(
                 f"each coding_rules entry must be an object with exactly one of {known} "
@@ -393,11 +396,12 @@ def _excluded_roots(raw: object) -> tuple[ExcludedRootDecl, ...]:
                 f"{' or '.join(EXCLUDED_ROOT_KINDS)} (got {item!r}). Next: give the entry a "
                 "kind of path or gitignore."
             )
-        unknown = sorted(str(key) for key in set(item) - set(EXCLUDED_KEYS))
+        unknown = unknown_keys(item, EXCLUDED_KEYS)
         if unknown:
             raise ConfigError(
                 f"config.json git_excluded_folders[] has unknown keys {unknown} (known: "
-                f"{', '.join(EXCLUDED_KEYS)}). Next: delete or correct those keys, then rerun."
+                f"{', '.join(EXCLUDED_KEYS)}). {USER_KEY_NOTE} "
+                "Next: delete or correct those keys, then rerun."
             )
         if kind == "path":
             out.append(
