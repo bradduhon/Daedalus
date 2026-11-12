@@ -229,6 +229,23 @@ def test_enablement_plus_other_paths_gets_generic_next(tmp_path: Path) -> None:
     assert _tree_line(repo, tmp_path).endswith("Next: commit or stash before starting a train")
 
 
+def test_an_uncommitted_manifest_alone_is_ok_and_named(tmp_path: Path) -> None:
+    # 0257: a run starts with only the settings files uncommitted, so the doctor agrees.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _commit_all_empty(repo)
+    (repo / "service-manifest.json").write_text("{}")
+    assert _tree_line(repo, tmp_path) == (
+        "OK   clean working tree apart from the settings files service-manifest.json, which "
+        "are not committed, so a pull request will not carry them"
+    )
+    (repo / "x.txt").write_text("dirty")
+    assert _tree_line(repo, tmp_path) == (
+        "MISS clean working tree: uncommitted changes present: x.txt. "
+        "Next: commit or stash before starting a train"
+    )
+
+
 def test_clean_tree_is_ok(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)

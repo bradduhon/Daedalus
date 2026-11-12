@@ -8,6 +8,7 @@ import hmac
 import os
 import re
 import shlex
+import stat
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -289,6 +290,10 @@ def clear_train(repo: Path) -> Path:
 DIRTY_LIMIT = 10
 RERUN = "start the Build Train again (/daedalus:run)."
 CLEAN_NEXT = f"Next: commit or stash your changes from your own shell, then {RERUN}"
+# 0257: the settings files a run may start with uncommitted, named from the repository root.
+SETTINGS_PATHS = (manifest.MANIFEST_NAME, ".claude/daedalus/config.json")
+# 0257: changed in the work tree or untracked only; a staged change makes git merge abort.
+SETTINGS_CODES = (" M", "??")
 # 0247: with no decisions file named, a run records no decisions and asks nothing about it.
 LEDGER_NONE = "decisions: none, no decisions file is named in the service manifest."
 
@@ -308,6 +313,55 @@ def _dirty(repo: Path, *pathspec: str) -> list[str]:
     # 0007: name the dirty paths so nobody reruns git status to find them.
     out = _out(repo, "status", "--porcelain", "--untracked-files=all", *pathspec)
     return [line[3:].split(" -> ")[-1] for line in out.splitlines() if line.strip()]
+
+
+def _digest(repo: Path, rel: str) -> str | None:
+    # 0257: a regular file inside the repository, no link on the way; anything else is not admitted.
+    path = repo / rel
+    below = (p for p in (path, *path.parents) if p != repo and p.is_relative_to(repo))
+    if any(os.path.islink(p) for p in below):
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            return None
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def split_settings(repo: Path, porcelain: str) -> tuple[list[str], dict[str, str]]:
+    # 0257: (every other uncommitted path, each admitted settings file with its digest).
+    other: list[str] = []
+    settings: dict[str, str] = {}
+    for line in porcelain.splitlines():
+        if not line.strip():
+            continue
+        code, rel = line[:2], line[3:]
+        found = None
+        if code in SETTINGS_CODES and rel in SETTINGS_PATHS:
+            found = _digest(repo, rel)
+        if found is None:
+            other.append(rel.split(" -> ")[-1])
+        else:
+            settings[rel] = found
+    return other, settings
+
+
+def _admitted(state: dict[str, object]) -> dict[str, str]:
+    held = state.get("settings_uncommitted")
+    if not isinstance(held, dict):
+        return {}
+    return {str(k): v for k, v in held.items() if isinstance(v, str)}
+
+
+def _uncommitted(repo: Path, admitted: dict[str, str] | None = None) -> list[str]:
+    # 0257: the dirty paths, less each settings file still holding the bytes it held at begin.
+    out = _out(repo, "status", "--porcelain", "--untracked-files=all")
+    other, settings = split_settings(repo, out)
+    held = admitted or {}
+    return other + [rel for rel, digest in settings.items() if held.get(rel) != digest]
 
 
 def _shown(paths: list[str]) -> str:
@@ -439,7 +493,10 @@ def _config_lines(config: Config, cache: str | None) -> list[str]:
 def begin(cwd: Path, ledger_feature: bool | None = True) -> list[str]:
     # 0024: build-train Preconditions 1 to 9, ordered so a failure leaves no train state behind.
     repo = repo_root(cwd.resolve())
-    dirty = _dirty(repo)
+    # 0257: the settings files alone may stay uncommitted; their bytes are held for later checks.
+    dirty, settings = split_settings(
+        repo, _out(repo, "status", "--porcelain", "--untracked-files=all")
+    )
     if dirty:
         raise WorkspaceError(f"uncommitted changes in {repo}: {_shown(dirty)}. {CLEAN_NEXT}")
     base = _branch(repo)
@@ -456,6 +513,7 @@ def begin(cwd: Path, ledger_feature: bool | None = True) -> list[str]:
             "repo": str(repo),
             "base_branch": base,
             "base_sha": base_sha,
+            "settings_uncommitted": settings,
             "charter_root": str(charter) if charter else None,
             "charter_base": charter_base,
             "charter_branch_created": charter is not None,
@@ -775,7 +833,7 @@ def _integration_back(
     ):
         return True
     # 0024: a dirty main checkout or uncommitted contract stays on the integration branch.
-    dirty = _dirty(repo)
+    dirty = _uncommitted(repo, _admitted(state))
     if state.get("charter_root"):
         charter = Path(str(state["charter_root"]))
         dirty += [f"{charter.name}/{p}" for p in _dirty(charter, "--", "specs/")]
@@ -909,7 +967,7 @@ def finish(repo: Path) -> list[str]:
     repo = repo.resolve()
     train_id, state = _active(repo)
     integration = f"daedalus/{train_id}"
-    dirty = _dirty(repo)
+    dirty = _uncommitted(repo, _admitted(state))
     if dirty:
         raise WorkspaceError(
             f"a coder changed the main checkout instead of its worktree: {_shown(dirty)}. "
@@ -1287,7 +1345,7 @@ def merge(repo: Path, ids: list[str]) -> list[str]:
             "Next: pass each unit id once, comma-separated."
         )
     wave = _wave(repo, train_id, state, ids)
-    dirty = _dirty(repo)
+    dirty = _uncommitted(repo, _admitted(state))
     if dirty:
         raise WorkspaceError(
             f"the integration worktree {repo} has changes: {_shown(dirty)}. "
@@ -1661,7 +1719,9 @@ def pr_body(repo: Path, train_id: str) -> list[str]:
     return [f"body: {body}", f"issues: {', '.join(lines) or 'none'}"]
 
 
-def _resume_target(repo: Path, branch: str, start: str | None = None) -> bool:
+def _resume_target(
+    repo: Path, branch: str, start: str | None = None, admitted: dict[str, str] | None = None
+) -> bool:
     # issue 23: a branch an early stop deleted is created again at start, when one is known.
     head = _out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
     if head == branch:
@@ -1669,7 +1729,7 @@ def _resume_target(repo: Path, branch: str, start: str | None = None) -> bool:
     missing = _run(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}").returncode
     if missing and start is None:
         return False
-    dirty = _dirty(repo)
+    dirty = _uncommitted(repo, admitted)
     if dirty:
         raise WorkspaceError(
             f"cannot switch {repo} to {branch}: uncommitted changes {_shown(dirty)}. "
@@ -1690,7 +1750,9 @@ def resume(repo: Path) -> list[str]:
     charter_base = str(state.get("charter_base") or "") or None
     lock_sha = str(state.get("lock_sha") or "") or None
     switch_charter = charter is not None and _resume_target(charter, integration, charter_base)
-    switch_repo = not state.get("merged") and _resume_target(repo, integration, lock_sha)
+    switch_repo = not state.get("merged") and _resume_target(
+        repo, integration, lock_sha, _admitted(state)
+    )
     mark_train(repo, train_id)
     lines = [f"resumed train {train_id}"]
     if switch_charter and charter is not None:

@@ -1061,6 +1061,18 @@ BLOCKS: tuple[Block, ...] = (
 
 
 @dataclass(frozen=True)
+class Unsettable:
+    file: str
+    key: str
+    # 0257: one plain sentence the wizard prints on why the key is left to a hand edit.
+    why: str
+
+
+# 0257: keys the set form deliberately refuses; every other key is settable, and a test holds it.
+UNSETTABLE: tuple[Unsettable, ...] = ()
+
+
+@dataclass(frozen=True)
 class Overlap:
     id: str
     text: str
