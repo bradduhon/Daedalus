@@ -563,3 +563,43 @@ def test_the_script_blocks_a_judge_in_a_train(tmp_path: Path) -> None:
     assert out["decision"] == "block" and out["reason"] == handback_check.judge(stop)
     whole = _stop(_rejected(NODE + CELLS), "daedalus:auditor", cwd=str(tmp_path))
     assert _run(json.dumps(whole)).stdout == ""
+
+
+def _train_repo(tmp_path: Path, listed: list[str] | None) -> Path:
+    # 0281: a train whose round 1 findings file lists the given keys, or no file at all.
+    from lib import train_state
+    from lib.audit_proof import findings_path
+
+    repo, train = tmp_path / "repo", "20261026-002310"
+    (repo / ".git").mkdir(parents=True)
+    (repo / TRAIN_MARKER).parent.mkdir(parents=True)
+    (repo / TRAIN_MARKER).write_text(f"{train}\n", encoding="utf-8")
+    train_state.save(repo, train, {"train_id": train})
+    if listed is not None:
+        path = findings_path(repo, train, 1)
+        path.parent.mkdir(parents=True)
+        path.write_text("".join(f"{key} | high | scope\n" for key in listed), encoding="utf-8")
+    return repo
+
+
+def test_a_rejected_reply_listing_fewer_findings_than_its_file_is_refused(tmp_path: Path) -> None:
+    repo = _train_repo(tmp_path, ["audit/round1/test_scope_x.py::test_y", "a.py:3 contract"])
+    reply = _rejected(NODE + CELLS, "**a.py:3** the contract drifts")
+    got = handback_check.judge(_handback(reply, "daedalus:auditor", cwd=str(repo)))
+    assert got is not None
+    assert "lists 1 finding lines but the round's findings file lists 2" in got
+    assert handback_check.round_findings(str(repo)) == 2
+
+
+def test_a_rejected_reply_matching_its_file_passes(tmp_path: Path) -> None:
+    repo = _train_repo(tmp_path, ["audit/round1/test_scope_x.py::test_y"])
+    reply = _rejected(NODE + CELLS)
+    assert handback_check.judge(_handback(reply, "daedalus:auditor", cwd=str(repo))) is None
+
+
+def test_an_unreadable_findings_file_leaves_the_count_unjudged(tmp_path: Path) -> None:
+    repo = _train_repo(tmp_path, None)
+    assert handback_check.round_findings(str(repo)) is None
+    assert handback_check.round_findings("relative/path") is None
+    reply = _rejected(NODE + CELLS)
+    assert handback_check.judge(_handback(reply, "daedalus:auditor", cwd=str(repo))) is None

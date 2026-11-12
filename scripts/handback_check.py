@@ -125,8 +125,9 @@ def _judge_next(agent: str) -> str:
     )
 
 
-def findings_problem(agent: str, reply: str) -> str | None:
-    # 0281: a failing verdict whose finding lacks its rule, a place or its search is refused.
+def findings_problem(agent: str, reply: str, listed: int | None = None) -> str | None:
+    # 0281: a failing verdict whose finding lacks its rule, a place or its search is refused;
+    # listed is the round's findings file count, None when it cannot be read.
     from lib.audit_proof import VERDICT_REJECTED
     from lib.audit_rounds import cell_problems, reply_finding
     from lib.coder_model import REFUTED_PREFIX
@@ -149,12 +150,37 @@ def findings_problem(agent: str, reply: str) -> str | None:
     else:
         return None
     problems: list[str] = []
+    if agent == AUDITOR and listed is not None and len(named) < listed:
+        problems.append(
+            f"the REJECTED reply lists {len(named)} finding lines but the round's findings file "
+            f"lists {listed}"
+        )
     for name, row in named:
         lacks = cell_problems(row)
         if lacks:
             shown = row if len(row) <= SHOWN_CHARS else row[:SHOWN_CHARS] + "..."
             problems.append(f"{name} {shown!r} has {' and '.join(lacks)}")
     return "; ".join(problems) or None
+
+
+def round_findings(cwd: object) -> int | None:
+    # 0281: the count in the round's findings file, by the verdict command's own readers.
+    from lib import train_state
+    from lib.audit_proof import ProofError, findings_path, read_findings
+    from lib.project_root import project_root
+    from lib.train_runner import derived_round
+
+    if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        return None
+    try:
+        repo = project_root(Path(cwd))
+        train = train_state.active_train(repo)
+        if train is None:
+            return None
+        path = findings_path(repo, train, derived_round(train_state.load(repo, train)))
+        return len(read_findings(path))
+    except (OSError, ValueError, ProofError, train_state.TrainStateError):
+        return None
 
 
 def _agent(hook_input: dict[str, object]) -> str:
@@ -211,7 +237,8 @@ def judge(hook_input: dict[str, object]) -> str | None:
     reply = _reply(hook_input)
     agent = _agent(hook_input) if isinstance(reply, str) and reply else ""
     if agent in (VERIFIER, AUDITOR):
-        found = findings_problem(agent, str(reply))
+        listed = round_findings(hook_input.get("cwd")) if agent == AUDITOR else None
+        found = findings_problem(agent, str(reply), listed)
         if found is None:
             return None
         return f"Daedalus hand-back check: {found}. Next: {_judge_next(agent)}."

@@ -85,12 +85,12 @@ take the full procedure and say so in your paragraph. The excluded paths are `CO
 in `scripts/lib/plan_record.py` (0182). With an `Assets:` line, the stat command ends with its
 tail, so asset files never count toward the size; the name list never carries the tail.
 A small change takes the short form. Keep the judged tip of step 0, the full diff with its
-removed lines (step 1), the fixed class commands of step 2, scope (step 4) and compliance
-(step 5), every place of each rule (step 6), one failing test per blocking finding with the
-findings file and the three cells (Finding format items 1 to 4 and 6), and both verdict
-lines. Skip the rank by readers, the reachable scope with its `Reachable:` and `Hunt:` lines, and the adversarial corpus run (Finding format item 5); a
-small change touches no jail check file. The short form is one round, round 1. A later round
-after a fix takes the full procedure.
+removed lines (step 1), the fixed class commands of step 2, scope (step 4) and compliance (step
+5), every place of each rule (step 6), one failing test per blocking finding with the findings
+file and the three cells (Finding format items 1 to 4 and 6), and both verdict lines. Skip the
+rank by readers, the reachable scope with its `Reachable:` and `Hunt:` lines, and the
+adversarial corpus run (Finding format item 5); a small change touches no jail check file. The
+short form is one round, round 1. A later round after a fix takes the full procedure.
 
 ## Table-diff form (0232)
 When the dispatch carries a `Form: table diff` line, run
@@ -200,9 +200,8 @@ Work through every step for every branch.
    rule it breaks in one sentence. Then search the submission at `<tip>` for every other place
    that rule is broken, such as `git grep -n <term> <branch>`, and file one finding that lists
    them all with that search; its test asserts the rule at every place it lists. A rule with
-   one place still carries its search; the search is the proof that one is all. What you
-   return is everything in this submission that needs fixing; a second round will read only
-   what that round changed.
+   one place still carries its search; the search is the proof that one is all. Assume no
+   further round: what you return is everything in this submission that needs fixing.
 
 ## Severity
 - critical: exploitable now, or exposes data, credentials or key material.

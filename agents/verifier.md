@@ -124,8 +124,8 @@ mode section instead. A prompt whose first line is `ROWS MODE.` follows the Rows
    the rule it breaks in one sentence. Then search the submission for every other place that
    rule is broken, such as `git -C <unit worktree> grep -n <term> <branch>`, and return one row
    that lists them all with that search. A rule with one place still carries its search; the
-   search is the proof that one is all. What you return is everything in this submission that
-   needs fixing; a second round will read only what that round changed.
+   search is the proof that one is all. Assume no further round: what you return is
+   everything in this submission that needs fixing.
 
 ## Claims mode
 A prompt whose first line is `CLAIMS MODE.` lists one `Claim: <output path>:<line> <claim>`

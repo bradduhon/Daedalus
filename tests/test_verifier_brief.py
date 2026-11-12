@@ -121,8 +121,7 @@ def test_refuted_rows_are_code_or_scope_and_a_deviation_excuses_scope() -> None:
 
 
 WHOLE_LIST = (
-    "What you return is everything in this submission that needs fixing; a second round will "
-    "read only what that round changed."
+    "Assume no further round: what you return is everything in this submission that needs fixing."
 )
 
 
@@ -138,7 +137,7 @@ def test_each_judge_searches_every_place_before_the_verdict(name: str, heading: 
     assert "search the submission" in step and "every other place" in step
     assert "lists them all with that search" in step
     assert "A rule with one place still carries its search" in step
-    assert WHOLE_LIST in step
+    assert WHOLE_LIST in step and "second round" not in text
     for word in (" diff", " code ", " function"):
         assert word not in step, word
 
