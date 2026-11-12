@@ -76,13 +76,15 @@ def _terraform_reason(done: AdmittedCommand, base: str, cwd: str) -> str | None:
             return shell.R_TERRAFORM_OPERATOR
     chdir = [f"-chdir={done.cd_target.text}"] if done.cd_target is not None else []
     sub = done.subcommand.text
+    if sub == "validate":
+        # 0265: the run validates after hand-in; under the wrapper it never reaches a provider.
+        return command_allowlist.validate_gate(cwd) or shell.R_TERRAFORM_VALIDATE_RUN
     # 184: the init form meets the same switches, and only wrapped.
-    form = list(shell.TERRAFORM_INIT) if sub == "init" else [sub] if sub == "validate" else []
-    form = form or ["fmt", "-check"]
+    form = list(shell.TERRAFORM_INIT) if sub == "init" else ["fmt", "-check"]
     wrapped = done.unit is not None
-    reason = command_allowlist.terraform_reason([done.word.text, *chdir, *form], cwd, wrapped)
-    # 0265: validate runs from the run after hand-in; under the wrapper it never reaches a provider.
-    return reason or (shell.R_TERRAFORM_VALIDATE_RUN if sub == "validate" else None)
+    return command_allowlist.terraform_reason(
+        [done.word.text, *chdir, *form], cwd, wrapped, coder=True
+    )
 
 
 def _wrapped_reason(unit: str, base: str, cwd: str) -> str | None:
