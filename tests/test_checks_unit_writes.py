@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,9 @@ import pytest
 from lib import jail
 from lib.config import Config
 
-from tests.conftest import CFG, CWD, WT
+from tests.conftest import CFG, CWD, WT, write_folder_run
 from tests.hook_chain import (
+    CHAINS,
     decide,
     evaluate,
     internal_error_denies,
@@ -696,3 +698,87 @@ def test_coder_basetemp_refusal_names_the_flag_the_agent_and_the_next_action() -
     reason = evaluate(HOOK, _b("coder", f"cd {WT} && python3 -m pytest -q --basetemp=/tmp/x"))
     assert reason == jail.R_BASETEMP == jail.R_BASETEMP_AGENT.format(agent="coder")
     assert "--basetemp" in reason and "coder" in reason and "Next: drop --basetemp" in reason
+
+
+# 0281: the hand-back pass marker is written by the hand-back check alone, never by an agent.
+MARKER_DIR = f"/tmp/.daedalus/{os.geteuid()}/handback-pass/0123456789abcdef"
+MARKER = f"{MARKER_DIR}/a1"
+MARKER_COMMANDS = (
+    f"tee {MARKER}",
+    f"cp {WT}/src/a.py {MARKER}",
+    f"mv {WT}/src/a.py {MARKER}",
+    f"mkdir -p {MARKER_DIR}",
+    f"touch {MARKER}",
+    f"echo x > {MARKER}",
+    f'python3 -c \'open("{MARKER}", "w")\'',
+)
+AGENT_KINDS = sorted({key.split(" (")[0] for key in CHAINS})
+
+
+@pytest.mark.parametrize("agent", AGENT_KINDS)
+def test_no_agent_kind_writes_the_handback_pass_marker(agent: str) -> None:
+    for tool in ("Write", "Edit"):
+        assert not decide(_w(agent, MARKER, tool), CFG).allow, (agent, tool)
+    for command in MARKER_COMMANDS:
+        assert not decide(_b(agent, command), CFG).allow, (agent, command)
+
+
+@pytest.mark.parametrize("agent", ["writer", "comparer"])
+def test_a_document_agent_in_a_folder_run_writes_no_marker_outside_its_output_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str
+) -> None:
+    # 0281, issue 48: a live folder run with its output folder elsewhere refuses the marker path.
+    import freeze_sources
+    from lib import storage
+
+    from tests.test_doc_train import TRAIN, _call, _dispatched
+
+    monkeypatch.setattr(storage, "TMP_ROOT", tmp_path / "tmproot")
+    root, out = tmp_path.resolve() / "plain", tmp_path.resolve() / "out"
+    root.mkdir()
+    out.mkdir()
+    (root / "base.md").write_text("The fee is 12.\n", encoding="utf-8")
+    write_folder_run(root, out, train=TRAIN)
+    monkeypatch.chdir(root)
+    assert (
+        freeze_sources.main(
+            ["--train", TRAIN, "--output-dir", str(out), "--source", "A=baseline:base.md"]
+        )
+        == 0
+    )
+    _dispatched(root, agent)
+    marker = storage.make_tmp_dir("handback-pass", root) / "verifier-1"
+    allow, _, hook = _call(root, agent, "Write", file_path=str(marker), content="x")
+    assert (allow, hook) == (False, "doc_outputs")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="a folder run's output folder may sit inside the plugin's temporary root, so a "
+    "document agent can write a hand-back pass marker there",
+)
+@pytest.mark.parametrize("agent", ["writer", "comparer"])
+def test_a_folder_run_output_folder_on_the_marker_folder_writes_no_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str
+) -> None:
+    import freeze_sources
+    from lib import storage
+
+    from tests.test_doc_train import TRAIN, _call, _dispatched
+
+    monkeypatch.setattr(storage, "TMP_ROOT", tmp_path / "tmproot")
+    root = tmp_path.resolve() / "plain"
+    root.mkdir()
+    (root / "base.md").write_text("The fee is 12.\n", encoding="utf-8")
+    out = storage.make_tmp_dir("handback-pass", root).resolve()
+    write_folder_run(root, out, train=TRAIN)
+    monkeypatch.chdir(root)
+    assert (
+        freeze_sources.main(
+            ["--train", TRAIN, "--output-dir", str(out), "--source", "A=baseline:base.md"]
+        )
+        == 0
+    )
+    _dispatched(root, agent)
+    allow, _, _ = _call(root, agent, "Write", file_path=f"{out}/verifier-1", content="x")
+    assert not allow

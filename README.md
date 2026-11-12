@@ -559,7 +559,7 @@ A unit line may also carry `needs: <tool or protected path>[, ...]`. It lists th
 
 ### The receipts check
 
-`scripts/handback_check.py` runs on every SubagentStop and on every `SubagentHandback` tool call, during a train only. It judges only a coder's reply whose last line is `[STATUS: COMPLETE]`. Directly above that line it expects a `## Receipts` line, followed only by lines of six shapes:
+`scripts/handback_check.py` runs on every SubagentStop and on every `SubagentHandback` tool call, during a train only. It judges two kinds of reply: a coder's reply whose last line is `[STATUS: COMPLETE]`, and a judge's failing verdict. In a coder's COMPLETE reply, directly above that line it expects a `## Receipts` line, followed only by lines of six shapes:
 
 - `- commit <40 hex> <subject>`
 - `- test <command> => <last output line>`
@@ -568,7 +568,7 @@ A unit line may also carry `needs: <tool or protected path>[, ...]`. It lists th
 - `- deviation <file or behaviour> | <reason>`
 - `- hunt <form> => refused` or `- hunt <form> => admitted, fixed in <7 to 40 hex>`
 
-At least one commit line and one test line must be there. A COMPLETE line that carries ` hunt=<n>` must place it directly before ` turns=<n>`, and n must equal the number of hunt lines in the block (227). A reply in another shape goes back to the coder with one `Next:` line naming the shape, before the verifier sees it. A check that cannot run never blocks the coder, and the verifier still judges the unit. `scripts/cite.py` prints the `file:line` of each line holding a fixed string, so a coder can paste a citation instead of retyping it.
+At least one commit line and one test line must be there. A COMPLETE line that carries ` hunt=<n>` must place it directly before ` turns=<n>`, and n must equal the number of hunt lines in the block (227). A reply in another shape goes back to the coder with one `Next:` line naming the shape, before the verifier sees it. A verifier's `[VERDICT: REFUTED]` reply and an auditor's `[VERDICT: REJECTED]` reply must end every finding with ` | rule: <the rule broken> | places: <file>:<line or named part>[, ...] | search: <the command that found every place>`. A finding without them goes back to the judge with one `Next:` line. A passing judge hand-back leaves a pass marker under `/tmp/.daedalus/<uid>/handback-pass/`, so the judge's later stop that repeats the same last line is not judged twice. An auditor reply that lists fewer findings than the round's findings file goes back the same way, a count compared only when a finding line in the reply names the same round as that file. A check that cannot run never blocks the coder, and the verifier still judges the unit. `scripts/cite.py` prints the `file:line` of each line holding a fixed string, so a coder can paste a citation instead of retyping it.
 
 ### The verifier
 
@@ -782,7 +782,7 @@ Daedalus/
 │   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release, pr-body
 │   ├── enforce_agent_jail.py        # PreToolUse policy
 │   ├── freeze_sources.py            # freezes and verifies a document train's sources
-│   ├── handback_check.py            # SubagentStop check of a coder's receipts block
+│   ├── handback_check.py            # hand-back check of a coder's receipts and a judge's findings
 │   ├── import_pack.py               # operator-run: writes a control pack from an OSCAL catalog or a CIS id map
 │   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
 │   ├── standing_rules.py            # derives the standing-rules file from the ledger
