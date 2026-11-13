@@ -1048,7 +1048,11 @@ def _release_repo(
     else:
         (repo / "VERSION").write_text(f"{merged_version}\n")
     _commit_all(repo, f"Build Train {TRAIN}")
-    return _ok(repo, "rev-parse", "HEAD")
+    sha = _ok(repo, "rev-parse", "HEAD")
+    # 0282: the release step checks the recorded tip is an ancestor of the merge sha.
+    record.setdefault("verdict", {"status": "approved", "tip": sha, "round": 1, "seq": 1})
+    train_state.save(repo, TRAIN, record)
+    return sha
 
 
 def _summary(repo: Path, *extra: str, class_line: str | None = CLASS_Y) -> None:
@@ -1312,6 +1316,91 @@ def test_release_compares_against_the_merge_parent_when_main_moved(repo: Path) -
     done = _release(repo, bumped)
     assert done.returncode == 0, done.stderr
     assert done.stdout.splitlines()[0] == f"release: v1.1.1, class Z, merge {bumped}"
+
+
+def _run_branch(repo: Path, **state: Any) -> str:
+    # 0279: a run branch of three commits off main, its tip recorded as the audited tip.
+    (repo / "VERSION").write_text("1.0.0\n")
+    _commit_all(repo, "base")
+    base = _ok(repo, "rev-parse", "HEAD")
+    _ok(repo, "switch", "-q", "-c", f"daedalus/{TRAIN}")
+    for n, version in enumerate(("1.0.0", "1.0.0", "1.1.0"), start=1):
+        (repo / f"unit{n}.txt").write_text(f"unit {n}\n")
+        (repo / "VERSION").write_text(f"{version}\n")
+        _commit_all(repo, f"Add unit {n}")
+    tip = _ok(repo, "rev-parse", "HEAD")
+    verdict = {"status": "approved", "tip": tip, "round": 1, "seq": 1}
+    record: dict[str, object] = {"train_id": TRAIN, "repo": str(repo), "base_branch": "main"}
+    record.update(base_sha=base, units=[], merged=True, verdict=verdict, **state)
+    train_state.save(repo, TRAIN, record)
+    _ok(repo, "switch", "-q", "main")
+    (repo / "main.txt").write_text("main moved\n")
+    _commit_all(repo, "Move main")
+    return tip
+
+
+def test_release_finds_the_run_on_main_after_a_merge_commit(repo: Path) -> None:
+    # 0279, 0282: a --no-ff merge keeps every run commit; the subject names the train branch.
+    tip = _run_branch(repo, docs_verdict={"status": "verified", "tip": "0" * 40})
+    newer = "20261019-120000"
+    train_state.save(repo, newer, {"train_id": newer, "repo": str(repo), "base_branch": "main"})
+    subject = f"Merge pull request {HASH}5 from owner/daedalus/{TRAIN}"
+    _ok(repo, "merge", "-q", "--no-ff", f"daedalus/{TRAIN}", "-m", subject)
+    sha = _ok(repo, "rev-parse", "HEAD")
+    _summary(repo)
+    refused = _release(repo, sha)
+    assert refused.returncode == 1 and "0000000000" in refused.stderr
+    record = train_state.load(repo, TRAIN)
+    record["docs_verdict"] = {"status": "verified", "tip": tip}
+    train_state.save(repo, TRAIN, record)
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[0] == f"release: v1.1.0, class Y, merge {sha}"
+    assert train_state.load(repo, TRAIN)["release"]["merge_sha"] == sha
+    assert _ok(repo, "merge-base", "--is-ancestor", tip, "main") == ""
+
+
+def test_release_names_a_squash_merge_plainly(repo: Path) -> None:
+    # 0282: a squash keeps none of the run's commits; the step says so and names one next step.
+    tip = _run_branch(repo)
+    _ok(repo, "merge", "-q", "--squash", f"daedalus/{TRAIN}")
+    _commit_all(repo, f"Run {TRAIN} ({HASH}5)")
+    sha = _ok(repo, "rev-parse", "HEAD")
+    _summary(repo)
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "the run's commits are not on main" in refused.stderr
+    assert f"its recorded tip {tip[:12]} is not an ancestor of merge sha {sha[:12]}" in (
+        refused.stderr
+    )
+    assert "Daedalus expects the pull request merged with a merge commit" in refused.stderr
+    assert "cannot tell a squashed or rebased pull request" in refused.stderr
+    assert refused.stderr.count("Next:") == 1
+    assert not _notes(repo).exists()
+    assert "release" not in train_state.load(repo, TRAIN)
+
+
+def test_release_keeps_the_off_main_message_for_an_unmerged_run(repo: Path) -> None:
+    # 0282: a run branch never merged keeps the message for a sha off the base history.
+    tip = _run_branch(repo)
+    _summary(repo)
+    refused = _release(repo, tip)
+    assert refused.returncode == 1
+    assert f"merge sha {tip} is not on the history of main, the branch the pull request " in (
+        refused.stderr
+    )
+    assert "Next: fetch main, then rerun with the merge commit sha it shows." in refused.stderr
+    assert "the run's commits are not on" not in refused.stderr
+
+
+def test_release_refuses_a_run_with_no_recorded_tip(repo: Path) -> None:
+    # 0282: without an audited tip the ancestry check cannot run, so the step refuses.
+    sha = _release_repo(repo, verdict={})
+    _summary(repo)
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "records no audited tip" in refused.stderr and "Next:" in refused.stderr
+    assert not _notes(repo).exists()
 
 
 def _plain_merge(repo: Path, merged_version: str = "1.1.0") -> str:

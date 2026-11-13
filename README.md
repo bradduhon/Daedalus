@@ -136,7 +136,7 @@ It first checks that the build run's audit log holds an approved security verdic
 
 The push agent, the releaser, pushes the branch and watches CI. The pull request body is the build run's summary, with one line per issue the summary names. An issue named with a GitHub closing word, such as `Closes #<n>` or `Fixes #<n>`, gets a `Closes #<n>` line, so merging the pull request closes it. Every other mention, partial work included, gets a `Refs #<n>` line and stays open. If the build run used a branch in your Charter repository, the push agent also pushes that branch and opens its pull request after the code one. The Charter is a separate repository for your decisions and specs, named by the `local_docs_folder` setting. If a commit landed on the train's branch after the audit, the push run adds one recovery audit round on the new tip before it pushes.
 
-You review and merge. Once `gh pr view <url> --json state` shows the merge, delete the train branch from your own shell with `git branch -D daedalus/<train-id>`.
+You review and merge. Merge with a merge commit, never a squash or a rebase merge. A merge commit lands every commit of the run on your default branch as written, and the release step checks that the run's commits are there. Once `gh pr view <url> --json state` shows the merge, delete the train branch from your own shell with `git branch -D daedalus/<train-id>`.
 
 ### Execution Train
 

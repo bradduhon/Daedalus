@@ -67,6 +67,8 @@ between Bash calls.
 
 5. **Verification**: run unit tests and typecheckers before completing. Never `git push`.
    Commit messages carry no Co-Authored-By or other attribution trailer.
+   Every commit lands on the default branch as written (0279), so each is complete and its
+   message stands alone: imperative, says what changed, never "wip" or "fix review".
    No shell redirects to files; write files with Write or Edit. `2>&1` and `>/dev/null` are
    accepted and unneeded, because the Bash tool already returns stderr.
    - **Adversarial corpus** (spec 3.3): when your changed files include any path under
