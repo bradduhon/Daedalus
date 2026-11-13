@@ -629,7 +629,7 @@ def docs_problem(repo: Path, train_id: str, state: dict[str, object], current: s
         shown = tip[:12] if isinstance(tip, str) else "no tip"
         return f"the docs record names tip {shown}, not the current tip {current[:12]}"
     if status == train_state.VERIFIED:
-        return None
+        return _docs_judged(repo, train_id, state, docs.get("judged"), current)
     if status != train_state.REFUTED:
         return "the docs record holds no verified or refuted verdict"
     try:
@@ -644,6 +644,28 @@ def docs_problem(repo: Path, train_id: str, state: dict[str, object], current: s
         return (
             f"refuted docs claim {missing[0]} has no exemption, "
             f"{len(missing)} of {len(keys)} claims have none"
+        )
+    return None
+
+
+def _docs_judged(
+    repo: Path, train_id: str, state: dict[str, object], judged: object, current: str
+) -> str | None:
+    # 112: the verdict record step's check, rerun at push: the judged docs tip is the merged head.
+    if not isinstance(judged, str) or not TIP.fullmatch(judged):
+        return "the verified docs record names no judged docs tip"
+    name = f"{train_id}{train_state.DOCS_SUFFIX}"
+    found = [u.get("branch") for u in train_state.units(state) if u.get("name") == name]
+    branch = found[0] if found and isinstance(found[0], str) else None
+    out = _git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}")
+    head = (out or "").strip() if branch is not None else ""
+    if not TIP.fullmatch(head):
+        return f"the docs branch {branch or name} has no readable head"
+    if _git(repo, "merge-base", "--is-ancestor", head, current) is None:
+        return f"the docs branch head {head[:12]} is not merged into the tip {current[:12]}"
+    if head != judged:
+        return (
+            f"the merged docs commits end at {head[:12]}, not at the judged docs tip {judged[:12]}"
         )
     return None
 

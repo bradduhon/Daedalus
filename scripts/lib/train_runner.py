@@ -2573,12 +2573,14 @@ def _route_lines(
                 "failing. Next: rerun route without --rows for a verified unit."
             )
         records = workspace._audit_records(repo, state)
-        if not workspace.unit_verified(records, Path(str(unit["path"]))):
+        reply = workspace.newest_verdict(records, Path(str(unit["path"])))
+        if not workspace.unit_verified(records, Path(str(unit["path"]))) or reply is None:
             raise RunnerError(
                 f"the newest verifier reply on unit {planned.id} is not "
                 f"{workspace.VERIFIED}. Next: route the verdict the verifier gave."
             )
         checks = _operator_checks(repo, planned)
+        _verified_tip(repo, train_id, unit, str(reply[0]))
         count = len(_refutation_seqs(unit))
         head = f"route {planned.id}: verified model={_last_model(unit)} refutations={count}"
         return [f"{head} checks={len(checks)}", *checks]
@@ -2610,6 +2612,21 @@ def _route_lines(
         model = _sub(unit_model(repo, "coder", planned.id))[0]
         _sub(choice(repo, chose, over, cost))
     return [f"route {planned.id}: {route} model={model} refutations={count} checks=0"]
+
+
+def _verified_tip(repo: Path, train_id: str, unit: dict[str, object], seq: str) -> None:
+    # 77: the coder is idle once its verifier replies, so the branch tip is the tip judged;
+    # a repeated route on the same reply keeps the first tip.
+    judged = workspace.unit_tip(repo, unit)
+
+    def add(state: dict[str, object]) -> None:
+        raw = state.get("units")
+        for each in raw if isinstance(raw, list) else []:
+            if isinstance(each, dict) and each.get("name") == unit["name"]:
+                tips = train_state.record(each, workspace.VERIFIED_TIPS)
+                each[workspace.VERIFIED_TIPS] = {seq: judged, **tips}
+
+    train_state.change(repo, train_id, add)
 
 
 def route_unit(cwd: Path, unit_id: str, verdict: str, rows: int | None = None) -> Outcome:
@@ -2719,10 +2736,9 @@ def _finish_lines(
             "last of them."
         )
     try:
-        if others:
-            workspace.merge(repo, [label])
-        else:
-            workspace.finish(repo)
+        merged = workspace.merge(repo, [label]) if others else workspace.finish(repo)
+        # 77: a merge with no judged tip on record says so after the finish line.
+        told = [ln for ln in merged if ln.startswith(workspace.NO_TIP)]
         audit_name = workspace.audit_unit(train_id)
         if any(u.get("name") == audit_name for u in train_state.units(state)):
             workspace.refresh(repo, audit_name)
@@ -2733,12 +2749,12 @@ def _finish_lines(
         _append_notes(repo, train_id, placed)
     line = f"finish {unit_id}: merged={sha} next={next_unit or 'none'}"
     if next_unit is None:
-        return [line]
+        return [line, *told]
     try:
         follow = _unit_dispatch(repo, train_id, next_unit, warm)
     except (RunnerError, train_state.TrainStateError, workspace.WorkspaceError) as exc:
         raise RunnerError(f"{line}\n{exc}") from exc
-    return [f"{line} {follow[0]}", *follow[1:]]
+    return [f"{line} {follow[0]}", *told, *follow[1:]]
 
 
 def finish_unit(

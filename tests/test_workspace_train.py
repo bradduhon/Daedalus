@@ -2060,10 +2060,10 @@ def test_finish_of_a_skipped_train_judges_only_the_unmerged_fix_unit(
     assert _ok(repo, "rev-parse", f"daedalus/{train}") == base
 
 
-def test_finish_refuses_a_skipped_train_whose_wave_merge_carried_an_extra_file(
+def test_the_wave_merge_refuses_a_skipped_train_unit_carrying_an_extra_file(
     repo: Path,
 ) -> None:
-    # 126: the wave merge never judges scope, so finish judges the integration branch.
+    # 126: the wave merge applies finish's skipped-contract limit before any merge.
     train = _skipped_train(repo)
     train_state.update(repo, train, audit_session=SESSION)
     u1 = _built(repo, train, "u1")
@@ -2071,7 +2071,30 @@ def test_finish_refuses_a_skipped_train_whose_wave_merge_carried_an_extra_file(
     _commit_all(u1, "extra file")
     _dispatch(repo, u1)
     _verifier_stop(repo, VERIFIED_REPLY, u1)
+    base = _ok(repo, "rev-parse", f"daedalus/{train}")
+    before = train_state.load(repo, train)
+    with pytest.raises(WorkspaceError) as info:
+        workspace.merge(repo, ["U1"])
+    said = str(info.value)
+    assert "changes extra.txt, u1.txt" in said
+    assert said.count("Next:") == 1 and "Next: stop the train and run it again" in said
+    assert _ok(repo, "rev-parse", f"daedalus/{train}") == base
+    assert _merges(repo, f"daedalus/{train}") == [] and u1.is_dir()
+    assert train_state.load(repo, train) == before
+
+
+def test_finish_refuses_a_skipped_train_whose_integration_branch_carries_an_extra_file(
+    repo: Path,
+) -> None:
+    # 126: finish still judges the integration branch, here moved by hand past the wave merge.
+    train = _skipped_train(repo)
+    train_state.update(repo, train, audit_session=SESSION)
+    u1 = _built(repo, train, "u1")
+    _dispatch(repo, u1)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
+    (repo / "extra.txt").write_text("x\n")
+    _commit_all(repo, "extra file")
     base = _ok(repo, "rev-parse", f"daedalus/{train}")
     with pytest.raises(WorkspaceError) as info:
         finish(repo)

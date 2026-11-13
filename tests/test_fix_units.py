@@ -197,6 +197,23 @@ def test_a_fix_unit_waits_on_its_merge_check_like_any_unit(tmp_path: Path) -> No
     assert refused.code == 1 and "no recorded verifier verdict" in refused.lines[0], refused
 
 
+def test_a_fix_unit_commit_after_its_verified_route_is_refused(tmp_path: Path) -> None:
+    # 77: the judged tip binds a fix unit as it binds a planned unit.
+    root = _merged(_fixture(tmp_path / "repo"))
+    _ok(_fix(root))
+    _ok(train_runner.dispatch_unit(root, "fix1-u1"))
+    worktree = _built(root, "fix1-u1")
+    _verdict(root, worktree, VERIFIED_REPLY)
+    _ok(train_runner.route_unit(root, "fix1-u1", "VERIFIED"))
+    (worktree / "late.txt").write_text("late\n")
+    git(worktree, "add", "-A")
+    git(worktree, "commit", "-q", "-m", "late")
+    base = git(root, "rev-parse", f"daedalus/{TRAIN}").stdout.strip()
+    refused = train_runner.finish_unit(root, "fix1-u1")
+    assert refused.code == 1 and "after its VERIFIED reply" in refused.lines[0], refused
+    assert git(root, "rev-parse", f"daedalus/{TRAIN}").stdout.strip() == base
+
+
 def test_two_fix_units_the_second_fixing_the_first(tmp_path: Path) -> None:
     root = _merged(_fixture(tmp_path / "repo"))
     _ok(_fix(root))
