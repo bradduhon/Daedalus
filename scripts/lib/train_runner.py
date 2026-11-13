@@ -32,6 +32,8 @@ from lib import (
     work_classes,
     workspace,
 )
+from lib.agent_models import AgentModelError
+from lib.agent_models import resolve as resolve_model
 from lib.audit import DataDirError, ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
@@ -1129,7 +1131,44 @@ def _checked_in(
     return Outcome(EXIT_OK, session.lines)
 
 
-def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
+def orchestrating_record(repo: Path, by: str) -> dict[str, object]:
+    # 0276: the agent runs on the word the model command gives it; a script cannot read a session's.
+    unknown = {"by": by, "model": train_state.UNKNOWN_MODEL}
+    if by != train_state.BY_AGENT:
+        return {**unknown, "reason": train_state.NO_SESSION_RECORD}
+    try:
+        model = resolve_model(ORCHESTRATOR_AGENT, load_config(cwd=str(repo)), repo=repo)
+    except (AgentModelError, ConfigError, DataDirError):
+        model = None
+    if model not in work_classes.MODEL_RANK:
+        return {**unknown, "reason": train_state.AGENT_UNRESOLVED}
+    return {"by": by, "model": model, "reason": None}
+
+
+def record_orchestrating(repo: Path, by: str) -> None:
+    # 0276: run start only; begin and start are main-session commands no agent's table admits.
+    train_id = train_state.active_train(repo)
+    if train_id is None:
+        return
+    held = orchestrating_record(repo, by)
+    train_state.update(repo, train_id, **{train_state.ORCHESTRATING: held})
+
+
+def orchestrating_read(cwd: Path) -> Outcome:
+    # 0276: the one line a judgement call reads; it ends in decides or asks.
+    def read(repo: Path, train_id: str) -> list[str]:
+        return [train_state.orchestrating_line(train_state.load(repo, train_id))]
+
+    return _recorded(cwd, read)
+
+
+def start(
+    cwd: Path,
+    train: str,
+    output: str | None,
+    plugin_root: Path = PLUGIN_ROOT,
+    orchestrator: str = train_state.BY_SESSION,
+) -> Outcome:
     if not _SLUG.fullmatch(train):
         return Outcome(
             EXIT_STOP,
@@ -1178,7 +1217,8 @@ def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_
     except workspace.WorkspaceError as exc:
         return Outcome(EXIT_STOP, [str(exc)])
     # 0072, 0245: config.json limits.parallel_coders caps the coders a stage runs at once.
-    return _record_start(repo, defn, kind, features, output, config.max_concurrent_builders, lines)
+    builders = config.max_concurrent_builders
+    return _record_start(repo, defn, kind, features, output, builders, lines, orchestrator)
 
 
 def _record_start(
@@ -1189,6 +1229,7 @@ def _record_start(
     output: str | None,
     builders: int,
     lines: list[str],
+    orchestrator: str = train_state.BY_SESSION,
 ) -> Outcome:
     train_id = train_state.active_train(repo)
     if train_id is None:
@@ -1223,6 +1264,7 @@ def _record_start(
         consults_open=[],
         consumed_records=[],
         halted=None,
+        **{train_state.ORCHESTRATING: orchestrating_record(repo, orchestrator)},
     )
     shown = f", outputs in {out_dir}" if out_dir else ""
     return Outcome(
@@ -3933,6 +3975,7 @@ def state_lines(cwd: Path, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
             f"stage: {at} ({min(index + 1, len(stages))} of {len(stages)})",
             f"waiting on: {', '.join(_text(d, 'brief') for d in open_) or 'nothing'}",
             f"halted: {_text(session.state, 'halted') or 'no'}",
+            train_state.orchestrating_line(session.state),
             # 0271: one line per fix unit, naming what it fixes and answers.
             *(f"fix unit: {line}" for _, line in train_state.fix_lines(session.state)),
             # 0284: one line per hand-off, none when the run had none.

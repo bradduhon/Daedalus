@@ -488,6 +488,7 @@ No agent may read the key, and the credential check refuses one that tries. A se
 Each train has one state file, `<repo>/.claude/daedalus/trains/<train-id>.json`. Only scripts write it, under the lock file `<train-id>.lock` beside it, and the jail refuses tool writes into `.claude/daedalus/`. Its fields:
 
 - `train_id`, `repo`, `base_branch`, `base_sha`, `charter_root`, `charter_base`, `charter_branch_created`, `ledger_line` and `cache_dir`, written by `begin`.
+- `orchestrating`, the model that runs the run, written by `begin` and by `daedalus_train.py start`. With `--orchestrator agent` it holds the model the orchestrator agent is started on. Otherwise the main session runs the run, and no script can read that session's model, so it holds `unknown`. `daedalus_train.py model --orchestrating` prints it with `decides` for the top coding model or higher, or `asks` for anything below it and for `unknown`.
 - `lock_sha`, the contract lock commit every unit branch must descend from, written by `lock`.
 - `contract_skip`, `true` once `daedalus_train.py contract` printed `contract: skip` for the recorded plan. `lock --no-contract` refuses without it, and a new plan clears it.
 - `merged`, set by finish once every unit merged.
