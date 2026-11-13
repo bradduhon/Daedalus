@@ -710,7 +710,7 @@ def _warm(session: Session, stage: dict[str, object], unit: dict[str, object], c
         for d in _stage_dispatches(session, _text(stage, "id"))
         if d.get("coder") == coder and d.get("status") == RETURNED
     ]
-    from_unit = _text(held[-1], "unit") if held else ""
+    from_unit = _warm_from(session, unit, coder, held)
     refused = rebind(session.repo, session.train_id, coder, from_unit, _text(unit, "name"))
     if refused is not None:
         raise RunnerError(refused)
@@ -2278,7 +2278,155 @@ def _order(plan: plan_record.Plan, planned: plan_record.Unit) -> str:
     return f"serial after {', '.join(after)}" if after else "parallel"
 
 
-def _unit_dispatch(repo: Path, train_id: str, unit_id: str, warm: str | None) -> list[str]:
+RESUME_PAST = (
+    "coder {agent} recorded {tokens} tokens at its last return, past the context limit of "
+    "{limit}, so it is not resumed on unit {unit} (0284). Next: run daedalus_train.py dispatch "
+    "--repo {repo} --unit {unit} --warm {agent} --handoff-write and resume {agent} once with the "
+    "single line `{line}`; then run daedalus_train.py dispatch --repo {repo} --unit {unit} and "
+    "start a new coder on the brief it names, which carries the hand-off file."
+)
+NO_HANDOFF = (
+    "coder {agent} of unit {unit} recorded {tokens} tokens, past the context limit of {limit}, "
+    "and no hand-off of it is recorded, so a new coder has nothing to start from (0284). Next: "
+    "run daedalus_train.py dispatch --repo {repo} --unit {unit} --warm {agent} --handoff-write, "
+    "resume {agent} once with the single line `{line}`, then rerun this dispatch."
+)
+HANDOFF_WRITE_UNDER = (
+    "coder {agent} is not past the context limit at its last return, so it has no hand-off to "
+    "write (0284). Next: rerun dispatch with --warm {agent} alone."
+)
+HANDOFF_WRITE_TWICE = (
+    "coder {agent} was already resumed once on unit {unit} to write its hand-off, and that "
+    "resume is allowed once (0284). Next: run daedalus_train.py dispatch --repo {repo} --unit "
+    "{unit} without --warm to start a new coder from the hand-off."
+)
+
+
+def _past_limit(repo: Path, state: dict[str, object], agent: str) -> tuple[int, int] | None:
+    # 0284: (tokens, limit) when the agent's recorded size is past an active limit, else None.
+    from lib import handoff
+
+    tokens = handoff.recorded_tokens(train_state.units(state), agent)
+    if tokens is None:
+        return None
+    try:
+        limit = handoff.active_limit(operator_file.load(repo).context_limit)
+    except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
+        raise RunnerError(f"{exc}\n{_MODEL_SETTINGS_NEXT}") from exc
+    return (tokens, limit) if limit is not None and tokens > limit else None
+
+
+def _resume_refusal(repo: Path, state: dict[str, object], unit_id: str, agent: str) -> None:
+    # 0284: every resume path of a bound coder meets this one refusal past the limit.
+    from lib import handoff
+
+    past = _past_limit(repo, state, agent)
+    if past is not None:
+        raise RunnerError(
+            RESUME_PAST.format(
+                agent=agent,
+                tokens=past[0],
+                limit=past[1],
+                unit=unit_id,
+                repo=repo,
+                line=handoff.WRITE_LINE,
+            )
+        )
+
+
+def _warm_from(
+    session: Session, unit: dict[str, object], coder: str, held: list[dict[str, object]]
+) -> str:
+    # 0284: the unit a warm coder of a defined run leaves, once it meets the dispatch refusal.
+    label = workspace._unit_label(session.train_id, _text(unit, "name"))
+    _resume_refusal(session.repo, session.state, label, coder)
+    return _text(held[-1], "unit") if held else ""
+
+
+def _holder(repo: Path, train_id: str, name: str) -> str | None:
+    # 0284: the coder the bindings file holds the unit for, if any.
+    try:
+        held = unit_binding._read(unit_binding.bindings_path(repo, train_id)).get(name, {})
+    except train_state.TrainStateError as exc:
+        raise RunnerError(str(exc)) from exc
+    agent = held.get("agent_id")
+    return agent if isinstance(agent, str) and agent else None
+
+
+def _handoff_write(
+    repo: Path, train_id: str, state: dict[str, object], uid: str, coder: str
+) -> list[str]:
+    # 0284: the one resume of a past-the-limit coder, marked on the unit once per agent.
+    from lib import handoff
+
+    unit = _unit_record(state, train_id, uid)
+    if _past_limit(repo, state, coder) is None:
+        raise RunnerError(HANDOFF_WRITE_UNDER.format(agent=coder))
+    if coder in _strings(unit.get(train_state.HANDOFF_RESUMES)):
+        raise RunnerError(HANDOFF_WRITE_TWICE.format(agent=coder, unit=uid, repo=repo))
+
+    def mark(fresh: dict[str, object]) -> None:
+        raw = fresh.get("units")
+        for each in raw if isinstance(raw, list) else []:
+            if isinstance(each, dict) and each.get("name") == unit["name"]:
+                done = _strings(each.get(train_state.HANDOFF_RESUMES))
+                each[train_state.HANDOFF_RESUMES] = [*done, coder]
+
+    train_state.change(repo, train_id, mark)
+    return [f"handoff-write {uid}: resume coder {coder} once with `{handoff.WRITE_LINE}`"]
+
+
+def _cold_handoff(repo: Path, train_id: str, state: dict[str, object], uid: str) -> str | None:
+    # 0284: the hand-off file a new coder starts from; the old coder past the limit needs one.
+    from lib import handoff
+
+    name = f"{train_id}-{uid.lower()}"
+    unit = next((u for u in train_state.units(state) if u.get("name") == name), None)
+    if unit is None:
+        return None
+    holder = _holder(repo, train_id, name)
+    recorded = train_state.handoff_files(unit)
+    past = _past_limit(repo, state, holder) if holder is not None else None
+    if past is not None and not any(old == holder for old, _, _ in recorded):
+        raise RunnerError(
+            NO_HANDOFF.format(
+                agent=holder,
+                unit=uid,
+                tokens=past[0],
+                limit=past[1],
+                repo=repo,
+                line=handoff.WRITE_LINE,
+            )
+        )
+    open_ = [(old, file) for old, file, new in recorded if new is None]
+    if not open_:
+        return None
+    old, file = open_[-1]
+    if holder == old:
+        # 0187, 0284: the old coder retires from the unit, so the new coder's first write binds it.
+        refused = unit_binding.release(repo, train_id, name)
+        if refused is not None:
+            raise RunnerError(refused)
+    return file
+
+
+def _with_handoff(brief: Path, file: str) -> None:
+    # 0284: the unit's brief plus one Hand-off line after its Worktree line; a later one replaces.
+    from lib import handoff
+
+    rows = [
+        row
+        for row in brief.read_text(encoding="utf-8").splitlines()
+        if not row.startswith(handoff.BRIEF_PREFIX)
+    ]
+    at = next((i + 1 for i, row in enumerate(rows) if row.startswith("Worktree: ")), len(rows))
+    rows.insert(at, f"{handoff.BRIEF_PREFIX}{file}")
+    atomic.write_atomic(brief, "\n".join(rows) + "\n")
+
+
+def _unit_dispatch(
+    repo: Path, train_id: str, unit_id: str, warm: str | None, handoff_write: bool = False
+) -> list[str]:
     # 0230: build steps 1, 2, 4 and 5 for one unit in one call; the recipe decided warm or cold.
     state = train_state.load(repo, train_id)
     plan, planned = _planned(state, unit_id)
@@ -2289,6 +2437,17 @@ def _unit_dispatch(repo: Path, train_id: str, unit_id: str, warm: str | None) ->
             "and hyphens. Next: rename the unit in the plan, then rerun dispatch."
         )
     coder = None if warm is None else _one_line("warm", warm, "dispatch")
+    if handoff_write:
+        if coder is None:
+            raise RunnerError(
+                "--handoff-write names the resume of a coder past the context limit, and this "
+                "call passed no --warm. Next: rerun dispatch with --warm naming the coder that "
+                "is past the limit."
+            )
+        return _handoff_write(repo, train_id, state, planned.id, coder)
+    if coder is not None:
+        _resume_refusal(repo, state, planned.id, coder)
+    taken = None if coder is not None else _cold_handoff(repo, train_id, state, planned.id)
     text = _plan_text(state, check=True) or ""
     section = _section_verbatim(text, planned.id)
     if section is None:
@@ -2326,15 +2485,17 @@ def _unit_dispatch(repo: Path, train_id: str, unit_id: str, warm: str | None) ->
     body = "\n\n".join(["\n".join(head), section, tail, REMINDER.format(path=path)]) + "\n"
     brief = _scratch(repo, train_id) / "briefs" / f"{slug}.md"
     # 0228: an existing brief is kept, so the Rows line the main session added stays.
-    if not brief.exists():
-        try:
+    try:
+        if not brief.exists():
             brief.parent.mkdir(parents=True, exist_ok=True)
             atomic.write_atomic(brief, body)
-        except OSError as exc:
-            raise RunnerError(
-                f"cannot write the brief {brief} ({exc}). Next: make {brief.parent} writable, "
-                "then rerun dispatch."
-            ) from exc
+        if taken is not None:
+            _with_handoff(brief, taken)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RunnerError(
+            f"cannot write the brief {brief} ({exc}). Next: make {brief.parent} writable, "
+            "then rerun dispatch."
+        ) from exc
     order = _order(plan, planned)
     if coder is None:
         chose, over = f"a cold coder for unit {planned.id}, {order}", "a warm resume"
@@ -2347,7 +2508,8 @@ def _unit_dispatch(repo: Path, train_id: str, unit_id: str, warm: str | None) ->
         cost = "the coder keeps the context of the unit it built"
     _sub(choice(repo, chose, over, cost))
     line = f"dispatch {planned.id}: model={model} worktree={path} brief={brief} "
-    lines = [line + f"rows={'needed' if rows else 'none'}"]
+    tail = "" if taken is None else f" handoff={taken}"
+    lines = [line + f"rows={'needed' if rows else 'none'}{tail}"]
     if rows:
         brief_text = brief.read_text(encoding="utf-8")
         packs_line = next(ln for ln in brief_text.splitlines() if ln.startswith("Packs: "))
@@ -2371,11 +2533,13 @@ def _with_next(outcome: Outcome, verb: str) -> Outcome:
     return outcome
 
 
-def dispatch_unit(cwd: Path, unit_id: str, warm: str | None = None) -> Outcome:
+def dispatch_unit(
+    cwd: Path, unit_id: str, warm: str | None = None, handoff_write: bool = False
+) -> Outcome:
     # 0230: choice, worktree, model and brief for one unit dispatch; one line for the State Block.
     def edit(repo: Path, train_id: str) -> list[str]:
         try:
-            return _unit_dispatch(repo, train_id, unit_id, warm)
+            return _unit_dispatch(repo, train_id, unit_id, warm, handoff_write)
         except workspace.WorkspaceError as exc:
             raise RunnerError(str(exc)) from exc
 
@@ -2444,6 +2608,10 @@ def _route_lines(
         route = "fix" if count < OPERATOR_REFUTATION else "operator"
         chose = f"a fix pass by unit {planned.id}'s own coder"
         over, cost = "a fresh coder", "one warm fix pass; the coder keeps its context"
+    if route == "fix":
+        holder = _holder(repo, train_id, str(unit["name"]))
+        if holder is not None:
+            _resume_refusal(repo, train_state.load(repo, train_id), planned.id, holder)
     # verify step 5: a third refutation is the operator's; no choice, no model record.
     if route == "operator":
         model = _last_model(_unit_record(train_state.load(repo, train_id), train_id, planned.id))
@@ -3776,6 +3944,13 @@ def state_lines(cwd: Path, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
             f"halted: {_text(session.state, 'halted') or 'no'}",
             # 0271: one line per fix unit, naming what it fixes and answers.
             *(f"fix unit: {line}" for _, line in train_state.fix_lines(session.state)),
+            # 0284: one line per hand-off, none when the run had none.
+            *(
+                f"hand-off: unit {u} old {old} new {new} size {size} file {file}"
+                for u, old, new, size, file in train_state.handoff_rows(
+                    session.state, session.train_id
+                )
+            ),
         ],
     )
 

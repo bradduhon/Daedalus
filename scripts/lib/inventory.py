@@ -342,6 +342,12 @@ FILES: tuple[Entry, ...] = (
         "daedalus_train.py dispatch or finish-unit --next starts a unit with no brief yet (0230)",
     ),
     Entry(
+        f"{_SCRATCH}/<train-id>/briefs/<unit-slug>.md",
+        "scripts/lib/train_runner.py:_with_handoff",
+        "daedalus_train.py dispatch starts a new coder on a unit whose old coder handed off; one "
+        "Hand-off line naming the hand-off file joins the brief (0284)",
+    ),
+    Entry(
         f"{_SCRATCH}/<train-id>/plan.md",
         "scripts/lib/train_runner.py:_fix_lines",
         "daedalus_train.py fix-unit adds a fix unit to the recorded plan, after every check (0271)",
@@ -407,6 +413,12 @@ FILES: tuple[Entry, ...] = (
         "scripts/lib/storage.py:make_tmp_dir",
         "the jail admits the hand-off write of an agent past the context limit during a run; "
         "the agent itself writes <agent id>.md there with its Write tool",
+    ),
+    Entry(
+        "/tmp/.daedalus/<uid>/handoffs/<project key>/<agent id>.md",
+        "scripts/lib/handoff.py:save_inline",
+        "an agent with no Write tool hands back an inline hand-off during a run; the hand-back "
+        "check saves its Hand-off section there, mode 0600 (0284)",
     ),
     Entry(
         "/tmp/.daedalus/<uid>/settings-backup/<project key>/<file>-<16 hex>.json",

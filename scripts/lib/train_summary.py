@@ -701,6 +701,16 @@ def _fixes(
     ]
 
 
+def _handoffs(state: dict[str, object], train_id: str, repo: Path) -> list[str]:
+    # 0284: printed only when the run recorded a hand-off; the file shows by its name alone.
+    rows = train_state.handoff_rows(state, train_id)
+    if not rows:
+        return []
+    where = "the train state hand-offs"
+    shown = [f"unit {u} old {o} new {new} size {n} file {Path(f).name}" for u, o, new, n, f in rows]
+    return ["## Hand-offs"] + [f"- {_cell(line, repo, None, where)}" for line in shown]
+
+
 def _exempted(exempt: dict[str, object], repo: Path, charter: Path | None) -> list[str]:
     # 0133, 0139: each exempted finding with its ledger id and tracking; 0142: untracked ones
     # carry a Deviation: line naming the finding and its exemption row.
@@ -895,6 +905,7 @@ def render(
     lines += _priorities(repo, state, logs, charter)
     lines += _units(repo, train_id, units, facts)
     lines += _fixes(state, units, train_id, repo)
+    lines += _handoffs(state, train_id, repo)
     lines.append("## Verification")
     verified = [
         f"- {labels[n]}: {_cell(line, repo, charter, where)}"
