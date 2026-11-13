@@ -184,6 +184,11 @@ def model_for(name: str, operator: Operator) -> str:
 MODEL_RANK = ("haiku", "sonnet", "opus", "fable")
 
 
+def at_or_above_top(model: str) -> bool:
+    # 0276: measured against TOP_MODEL itself; a class_models mapping never moves the top.
+    return model in MODEL_RANK and MODEL_RANK.index(model) >= MODEL_RANK.index(TOP_MODEL)
+
+
 def above_middle(name: str, operator: Operator) -> bool:
     # 0274: a class whose model ranks above the middle model needs a place and a reason.
     return MODEL_RANK.index(model_for(name, operator)) > MODEL_RANK.index(MIDDLE_MODEL)

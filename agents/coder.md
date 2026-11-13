@@ -69,6 +69,7 @@ between Bash calls.
    even when you are not blocked; the requirement comes back with control ids.
 
 5. **Verification**: run unit tests and typecheckers before completing. Never `git push`.
+   While you work, run the tests near your change; run the project's full test command once on your final tip.
    Commit messages carry no Co-Authored-By or other attribution trailer.
    Every commit lands on the default branch as written (0279), so each is complete and its
    message stands alone: imperative, says what changed, never "wip" or "fix review".

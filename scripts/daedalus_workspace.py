@@ -9,6 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.project_root import repo_refusal  # noqa: E402
+from lib.train_runner import record_orchestrating  # noqa: E402
+from lib.train_state import BY_AGENT, BY_SESSION, TrainStateError  # noqa: E402
 from lib.workspace import (  # noqa: E402
     WorkspaceError,
     begin,
@@ -53,6 +55,8 @@ def main(argv: list[str]) -> int:
     # issue 48, 0178: --scope folder opens a run with no git command, its outputs in --out.
     start.add_argument("--scope", choices=("repository", "folder"), default="repository")
     start.add_argument("--out")
+    # 0276: who orchestrates the run; the session's model is never guessed, so it records unknown.
+    start.add_argument("--orchestrator", choices=(BY_SESSION, BY_AGENT), default=BY_SESSION)
     locking = sub.add_parser("lock")
     locking.add_argument("--repo", type=Path, required=True)
     # 0156: --no-contract locks at the base once the contract subcommand recorded the skip.
@@ -107,10 +111,17 @@ def main(argv: list[str]) -> int:
             print(mark_train(repo, args.train))
         elif args.action == "unmark":
             print(f"cleared {clear_train(repo)}")
-        elif args.action == "begin" and args.scope == "folder":
-            print("\n".join(begin_folder_run(repo, args.out)))
         elif args.action == "begin":
-            print("\n".join(begin(repo)))
+            folder = args.scope == "folder"
+            lines = begin_folder_run(repo, args.out) if folder else begin(repo)
+            try:
+                record_orchestrating(repo, args.orchestrator)
+            except TrainStateError as exc:
+                # 0276: begin's output stays six lines; a run with no record reads asks.
+                print(
+                    f"daedalus-workspace: orchestrating model not recorded: {exc}", file=sys.stderr
+                )
+            print("\n".join(lines))
         elif args.action == "lock":
             print("\n".join(lock(repo, None if args.no_contract else args.contract, args.version)))
         elif args.action == "stop":

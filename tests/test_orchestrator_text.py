@@ -16,7 +16,7 @@ def test_build_train_keeps_personas_warm() -> None:
     assert "a persona stays warm after its first use" in roster
     # spec 8: the hook rebinds a warm coder as the resume goes out.
     assert "the hook rebinds the coder to the new unit as the message goes out" in roster
-    assert "The auditor stays warm only after its first verdict" in roster
+    assert "The auditor never stays warm across rounds" in roster
     assert "goes to that coder by SendMessage as a resume" in roster
     assert "A cold coder starts only when no warm coder built a dependency of the unit." in roster
     # 0186: no agent holds the standards; the orchestrator rereads changed rule files itself.

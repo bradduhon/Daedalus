@@ -563,7 +563,8 @@ def _header(
                     "rerun summary."
                 )
             lines.append(f"Migration: {_note(migration, repo, charter, 'Migration line')}")
-    return lines
+    # 0276: words and reasons from fixed tables only, so the line needs no public check.
+    return [*lines, train_state.orchestrating_line(state, "Orchestrating model")]
 
 
 def _note(text: str, repo: Path, charter: Path | None, row: str) -> str:

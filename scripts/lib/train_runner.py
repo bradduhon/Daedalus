@@ -14,7 +14,7 @@ import re
 import shlex
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
@@ -32,9 +32,12 @@ from lib import (
     work_classes,
     workspace,
 )
+from lib.agent_models import AgentModelError
+from lib.agent_models import resolve as resolve_model
 from lib.audit import DataDirError, ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
+    HANDBACK,
     R_BOTH_VERDICTS,
     REFUTED_PREFIX,
     SUMMARY_DIR,
@@ -48,6 +51,7 @@ from lib.audit_proof import (
     docs_findings_path,
     docs_keys,
     findings_path,
+    handback_message,
     hooks_live,
     ledger_parent,
     live_log,
@@ -57,6 +61,7 @@ from lib.audit_proof import (
     read_findings,
     round_keys,
     round_verdict,
+    stop_verdict,
     tip_admits,
     tip_problem,
     verdict_tip,
@@ -1129,7 +1134,44 @@ def _checked_in(
     return Outcome(EXIT_OK, session.lines)
 
 
-def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
+def orchestrating_record(repo: Path, by: str) -> dict[str, object]:
+    # 0276: the agent runs on the word the model command gives it; a script cannot read a session's.
+    unknown = {"by": by, "model": train_state.UNKNOWN_MODEL}
+    if by != train_state.BY_AGENT:
+        return {**unknown, "reason": train_state.NO_SESSION_RECORD}
+    try:
+        model = resolve_model(ORCHESTRATOR_AGENT, load_config(cwd=str(repo)), repo=repo)
+    except (AgentModelError, ConfigError, DataDirError):
+        model = None
+    if model not in work_classes.MODEL_RANK:
+        return {**unknown, "reason": train_state.AGENT_UNRESOLVED}
+    return {"by": by, "model": model, "reason": None}
+
+
+def record_orchestrating(repo: Path, by: str) -> None:
+    # 0276: run start only; begin and start are main-session commands no agent's table admits.
+    train_id = train_state.active_train(repo)
+    if train_id is None:
+        return
+    held = orchestrating_record(repo, by)
+    train_state.update(repo, train_id, **{train_state.ORCHESTRATING: held})
+
+
+def orchestrating_read(cwd: Path) -> Outcome:
+    # 0276: the one line a judgement call reads; it ends in decides or asks.
+    def read(repo: Path, train_id: str) -> list[str]:
+        return [train_state.orchestrating_line(train_state.load(repo, train_id))]
+
+    return _recorded(cwd, read)
+
+
+def start(
+    cwd: Path,
+    train: str,
+    output: str | None,
+    plugin_root: Path = PLUGIN_ROOT,
+    orchestrator: str = train_state.BY_SESSION,
+) -> Outcome:
     if not _SLUG.fullmatch(train):
         return Outcome(
             EXIT_STOP,
@@ -1178,7 +1220,8 @@ def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_
     except workspace.WorkspaceError as exc:
         return Outcome(EXIT_STOP, [str(exc)])
     # 0072, 0245: config.json limits.parallel_coders caps the coders a stage runs at once.
-    return _record_start(repo, defn, kind, features, output, config.max_concurrent_builders, lines)
+    builders = config.max_concurrent_builders
+    return _record_start(repo, defn, kind, features, output, builders, lines, orchestrator)
 
 
 def _record_start(
@@ -1189,6 +1232,7 @@ def _record_start(
     output: str | None,
     builders: int,
     lines: list[str],
+    orchestrator: str = train_state.BY_SESSION,
 ) -> Outcome:
     train_id = train_state.active_train(repo)
     if train_id is None:
@@ -1223,6 +1267,7 @@ def _record_start(
         consults_open=[],
         consumed_records=[],
         halted=None,
+        **{train_state.ORCHESTRATING: orchestrating_record(repo, orchestrator)},
     )
     shown = f", outputs in {out_dir}" if out_dir else ""
     return Outcome(
@@ -1590,6 +1635,8 @@ CLASS_CHECK_FILE = "class-check.txt"
 CLASS_OK = "class ok"
 # 0280: the finding class and severity of a unit the class check raised.
 CLASS_FINDING, CLASS_SEVERITY = "work-class", "high"
+# 349: a place's named part is a finding and state key, so it stays one short line.
+NAMED_PART_MAX = 80
 _SEP = " | "
 
 
@@ -1667,6 +1714,7 @@ def auditor_model(cwd: Path) -> Outcome:
         state = train_state.load(repo, train_id)
         merged = _audit_units(repo, train_id, state, operator)
         check, checked = _class_check(repo, train_id, state, merged, operator)
+        later = _later_audit_lines(repo, train_id, state)
         held = {n for n, _ in operator.work_classes}
         # (unit, class, line tail, planned class when the class check raised it)
         rows: list[tuple[str, str, str, str | None]] = []
@@ -1690,11 +1738,16 @@ def auditor_model(cwd: Path) -> Outcome:
         model = work_classes.model_for(cls, operator)
         entry: dict[str, object] = {"model": model, "class": cls, "unit": top}
         entry["raised_from"] = was_top
-        fields: dict[str, object] = {train_state.AUDITOR_MODEL: entry}
+        # 0278: every round is a new auditor, so each round keeps the model it starts on.
+        models = train_state.record(state, train_state.AUDITOR_MODELS)
+        fields: dict[str, object] = {
+            train_state.AUDITOR_MODEL: entry,
+            train_state.AUDITOR_MODELS: {**models, str(derived_round(state)): model},
+        }
         if check:
             fields[train_state.CLASS_CHECK] = check
         train_state.update(repo, train_id, **fields)
-        return [model, f"auditor {top}: {model} | class: {cls}{tail}", *checked]
+        return [model, f"auditor {top}: {model} | class: {cls}{tail}", *checked, *later]
 
     return _recorded(cwd, edit)
 
@@ -1768,6 +1821,12 @@ def _check_rows(
                 raise RunnerError(
                     f"{where} line {number} names its own planned class or a place that is not "
                     f"`<file>:<named part>`. {rerun}"
+                )
+            if len(part.strip()) > NAMED_PART_MAX:
+                raise RunnerError(
+                    f"{where} line {number} gives unit {uid} a named part of "
+                    f"{len(part.strip())} characters, over {NAMED_PART_MAX}; name a section, "
+                    f"a line range or the like, never a sentence. {rerun}"
                 )
             rank = work_classes.MODEL_RANK.index
             up = rank(work_classes.model_for(checked, operator)) > rank(
@@ -1846,6 +1905,8 @@ def _class_check(
     # 0280: a reread of the same file keeps its round; a new check binds the next round.
     same = _text(prior, "sha256") == sha
     round_ = _int(prior, "round", 0) if same else derived_round(state)
+    # 349: every key a unit was raised under, so an exemption of an earlier key still answers.
+    keys = {uid: [k for k in v if isinstance(k, str)] for uid, v in _raised_keys(prior).items()}
     lines: list[str] = []
     raised: list[str] = []
     for uid, entry in rows.items():
@@ -1859,9 +1920,52 @@ def _class_check(
         lines.append(f"class check {uid}: {name} -> {checked} ({model}) at {place}{mark}")
         if entry["raised"]:
             key = raised_key(place)
+            held = keys.setdefault(uid, [])
+            held += [] if key in held else [key]
+            by = _answered(uid, checked, held, state, merged, operator)
+            if by is not None:
+                entry["answered"] = by
+                raised.append(f"class check {uid}: answered by {by}")
+                continue
             raised.append(f"Class raised: {key}{_SEP}{CLASS_SEVERITY}{_SEP}{CLASS_FINDING}")
-    tail = f"class check: {len(rows)} unit(s), {len(raised)} raised, round {round_}"
-    return {"round": round_, "sha256": sha, "units": rows}, [*lines, *raised, tail]
+    open_ = len([row for row in raised if row.startswith("Class raised: ")])
+    tail = f"class check: {len(rows)} unit(s), {open_} raised, round {round_}"
+    check: dict[str, object] = {"round": round_, "sha256": sha, "units": rows}
+    if keys:
+        check[RAISED_KEYS] = keys
+    return check, [*lines, *raised, tail]
+
+
+RAISED_KEYS = "raised_keys"
+EXEMPTION = "exemption"
+
+
+def _raised_keys(check: dict[str, object]) -> dict[str, list[object]]:
+    held = _obj(check, RAISED_KEYS)
+    return {uid: v for uid, v in held.items() if isinstance(v, list)}
+
+
+def _answered(
+    uid: str,
+    raised_class: str,
+    keys: list[str],
+    state: dict[str, object],
+    merged: list[tuple[plan_record.Unit, dict[str, object], str]],
+    operator: operator_file.Operator,
+) -> str | None:
+    # 349: a raise is answered by a merged fix unit of that class or higher, or an exemption.
+    rank = work_classes.MODEL_RANK.index
+    need = rank(work_classes.model_for(raised_class, operator))
+    fix_units = train_state.record(state, train_state.FIX_UNITS)
+    for planned, _, name in merged:
+        fixed = _obj(fix_units, planned.id).get("fixes")
+        if isinstance(fixed, list) and uid in fixed:
+            if rank(work_classes.model_for(name, operator)) >= need:
+                return planned.id
+    exempted = train_state.record(state, train_state.EXEMPTIONS)
+    if any(key in _obj(exempted, r) for r in exempted for key in keys):
+        return EXEMPTION
+    return None
 
 
 REFUTATIONS = "refutations"
@@ -2021,6 +2125,62 @@ def round_lines(cwd: Path, unit_id: str, tip: str) -> Outcome:
             raise RunnerError(str(exc)) from exc
 
     return _with_next(_recorded(cwd, edit), "assets")
+
+
+def _reply_places(turn: list[Mapping[str, object]]) -> list[str]:
+    # 0278, 0281: `<place> | rule: <rule>` per place of the rejecting reply's finding lines.
+    rejecting = [r for r in turn if stop_verdict(r) == VERDICT_REJECTED]
+    handed = [r for r in rejecting if r.get("tool_name") == HANDBACK]
+    record: Mapping[str, object] = (handed or rejecting or [{}])[-1]
+    if record.get("tool_name") == HANDBACK:
+        raw = handback_message(record)
+        texts = [raw] if isinstance(raw, str) else []
+    else:
+        fields = (record.get("last_message_head"), record.get("last_message_tail"))
+        texts = [t for t in fields if isinstance(t, str)]
+    out: list[str] = []
+    for text in texts:
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        body = lines[1:-1]
+        body = body[: body.index("## Compliance")] if "## Compliance" in body else body
+        for row in (ln.removeprefix("- ") for ln in body if audit_rounds.reply_finding(ln)):
+            cells = audit_rounds.finding_cells(row)
+            rule = cells.get("rule", "")
+            for place in cells.get("places", "").split(audit_rounds.PLACE_SEP):
+                line = f"{place.strip()} | rule: {rule}"
+                if rule and place.strip() and line not in out:
+                    out.append(line)
+    return out
+
+
+def _later_audit_lines(repo: Path, train_id: str, state: dict[str, object]) -> list[str]:
+    # 0278: after a rejected round, the next auditor reads the fix's range and each place only.
+    verdict = train_state.record(state, train_state.VERDICT)
+    places = train_state.record(state, train_state.AUDIT_PLACES).get(str(verdict.get("round")))
+    judged = verdict.get("tip")
+    if verdict.get("status") != train_state.REJECTED or not isinstance(places, list):
+        return []
+    if not isinstance(judged, str) or TIP.fullmatch(judged) is None:
+        return []
+    now = _integration_tip(repo, train_id)
+    round_ = _int(verdict, "round", 0)
+    if judged == now:
+        raise RunnerError(
+            f"daedalus/{train_id} has no commit since round {round_} judged its tip "
+            f"{judged[:12]}, so the next round has nothing to read. Next: merge the fix units "
+            "with finish-unit, then rerun model."
+        )
+    try:
+        done = workspace._run(repo, "merge-base", "--is-ancestor", judged, now)
+    except workspace.WorkspaceError as exc:
+        raise RunnerError(str(exc)) from exc
+    if done.returncode != 0:
+        raise RunnerError(
+            f"the tip {judged[:12]} round {round_} judged is not an ancestor of daedalus/"
+            f"{train_id} at {now[:12]}, so the branch was rewritten. Next: stop the run with "
+            "this line as the reason; the operator decides how the run is audited again."
+        )
+    return [f"{RANGE_PREFIX}{judged}..{now}", *(f"{PLACE_PREFIX}{p}" for p in places)]
 
 
 # 0230: the build step 4 class list; a folder entry ends in a slash.
@@ -2945,6 +3105,47 @@ def _fix_text(
     return new_text, new
 
 
+def _fix_settings(repo: Path) -> operator_file.Operator:
+    try:
+        return operator_file.load(repo)
+    except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
+        raise RunnerError(f"{exc}\n{FIX_NEXT}") from exc
+
+
+def _fix_class(repo: Path, old: plan_record.Plan, fix: FixUnit) -> tuple[FixUnit, str]:
+    # 349: no --class takes the fixed unit's class, the highest by MODEL_RANK, a tie in order.
+    by_id = {u.id: u for u in old.units}
+    fixed = [by_id[f] for f in fix.fixes]
+    if fix.work_class is None and all(u.work_class is None for u in fixed):
+        return fix, f"from {fixed[0].id}"
+    operator = _fix_settings(repo)
+    top = fixed[work_classes.highest([u.effective_class for u in fixed], operator)]
+    if fix.work_class is not None:
+        rank = work_classes.MODEL_RANK.index
+        given = work_classes.model_for(fix.work_class, operator)
+        held = work_classes.model_for(top.effective_class, operator)
+        if rank(given) < rank(held) and fix.class_reason is None:
+            raise RunnerError(
+                f"--class {fix.work_class} runs on {given}, smaller than {held}, which unit "
+                f"{top.id} of class {top.effective_class} runs on. Next: rerun fix-unit with "
+                "--class-reason saying why the fix needs the smaller model, or with no --class."
+            )
+        return fix, "given"
+    place = fix.place if fix.place is not None else top.place
+    split = plan_record.split_place(place) if place is not None else None
+    if fix.place is None and split is not None:
+        if not any(plan_record._covers(entry, split[0]) for entry in fix.files):
+            raise RunnerError(
+                f"unit {top.id} has the class {top.effective_class} at {place}, and fix unit "
+                f"{fix.uid} does not name {split[0]} in --files. Next: rerun fix-unit with "
+                "--class and --place naming a file from --files and the named part of it."
+            )
+    reason = fix.class_reason if fix.class_reason is not None else top.class_reason
+    return replace(fix, work_class=top.work_class, place=place, class_reason=reason), (
+        f"from {top.id}"
+    )
+
+
 def _restore(target: Path, text: str, cause: str) -> None:
     # 0271: a failed record puts the plan file back as it was recorded.
     try:
@@ -2998,14 +3199,10 @@ def _fix_lines(repo: Path, train_id: str, fix: FixUnit) -> list[str]:
                 "the run and start one whose plan declares the contract."
             )
     cap = _int(state, "max_concurrent_builders", DEFAULT_MAX_CONCURRENT_BUILDERS)
+    fix, source = _fix_class(repo, old, fix)
     new_text, new = _fix_text(old, text, fix, lines, cap)
-    operator = None
-    if plan_record.has_class_fields(new):
-        # 0280: the plan step's class checks, read from the same settings it reads.
-        try:
-            operator = operator_file.load(repo)
-        except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
-            raise RunnerError(f"{exc}\n{FIX_NEXT}") from exc
+    # 0280: the plan step's class checks, read from the same settings it reads.
+    operator = _fix_settings(repo) if plan_record.has_class_fields(new) else None
     defects = plan_record.validate(new, cap, operator)
     if defects:
         raise RunnerError("\n".join([*defects, "Next: correct the fix unit's inputs, then rerun."]))
@@ -3032,7 +3229,8 @@ def _fix_lines(repo: Path, train_id: str, fix: FixUnit) -> list[str]:
     except (RunnerError, train_state.TrainStateError) as exc:
         _restore(target, text, str(exc))
         raise
-    return [f"fix-unit {fix.uid}: fixes {', '.join(fix.fixes)} plan sha256={sha}"]
+    named = f"class={fix.work_class or work_classes.PLUMBING} ({source})"
+    return [f"fix-unit {fix.uid}: fixes {', '.join(fix.fixes)} {named} plan sha256={sha}"]
 
 
 def fix_unit(cwd: Path, fix: FixUnit) -> Outcome:
@@ -3462,7 +3660,9 @@ def record_ledger(cwd: Path, sha: str, ids: str) -> Outcome:
     return _recorded(cwd, edit)
 
 
-def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> tuple[int, str | None]:
+def _auditor_seq(
+    repo: Path, train_id: str, status: str, seq: int | None
+) -> tuple[int, str | None, list[str]]:
     # 0089: the verdict is read from this session's auditor reply records, never from the caller.
     try:
         log, _ = live_log(repo, VERDICT_NEEDLE)
@@ -3506,7 +3706,7 @@ def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> tup
             f"{problem}. Next: run the security audit; the verdict is recorded from the "
             "auditor's reply, never typed."
         )
-    return found, verdict_tip(turn, found)
+    return found, verdict_tip(turn, found), _reply_places(turn)
 
 
 def derived_round(state: dict[str, object]) -> int:
@@ -3553,6 +3753,9 @@ def _class_rows_listed(
         return
     for uid, entry in _raised(check).items():
         key = raised_key(_text(entry, "place"))
+        # 349: a raise answered by a fix unit or an exemption owes no row.
+        if _text(entry, "answered"):
+            continue
         if listed is None or key not in listed:
             raise RunnerError(
                 f"the class check raised unit {uid}, and round {round_} lists no row `{key}"
@@ -3619,7 +3822,7 @@ def record_verdict(
         listed = _round_findings(repo, train_id, status, round_, findings) if findings else None
         _class_check_owed(repo, train_id, state)
         _class_rows_listed(repo, train_id, state, round_, listed)
-        found, named = _auditor_seq(repo, train_id, status, seq)
+        found, named, places = _auditor_seq(repo, train_id, status, seq)
         current = _integration_tip(repo, train_id)
         if tip is not None:
             if named != tip:
@@ -3643,6 +3846,10 @@ def record_verdict(
             # 73: the recovery round's auditor consult closes with its verdict.
             if train_state.record(state, REAUDIT):
                 _close_consult(state, AUDITOR_AGENT)
+            if status == train_state.REJECTED:
+                # 0278: the next round's Place: lines, read back by model --agent auditor.
+                held = train_state.record(state, train_state.AUDIT_PLACES)
+                state[train_state.AUDIT_PLACES] = {**held, str(round_): places}
             rounds = train_state.record(state, train_state.AUDIT_ROUNDS)
             # 67: an approval without a list records an empty round, so the next round derives.
             if listed is None:
@@ -3934,6 +4141,7 @@ def state_lines(cwd: Path, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
             f"stage: {at} ({min(index + 1, len(stages))} of {len(stages)})",
             f"waiting on: {', '.join(_text(d, 'brief') for d in open_) or 'nothing'}",
             f"halted: {_text(session.state, 'halted') or 'no'}",
+            train_state.orchestrating_line(session.state),
             # 0271: one line per fix unit, naming what it fixes and answers.
             *(f"fix unit: {line}" for _, line in train_state.fix_lines(session.state)),
             # 0284: one line per hand-off, none when the run had none.

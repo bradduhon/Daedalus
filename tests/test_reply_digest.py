@@ -79,12 +79,27 @@ def test_a_charter_docs_reply_keeps_its_status_line(tmp_path: Path) -> None:
         ("verifier", "\n".join(TABLE)),
         ("coder", "\n".join([*TABLE, "[STATUS: YIELD_WEB] what is x"])),
         ("contract-spec", "\n".join(TABLE)),
-        ("verifier", f"{VERIFIED}\ncorrected=0\n{VERIFIED}"),
         ("verifier", ""),
     ],
 )
-def test_other_agents_off_contract_and_short_replies_pass_whole(
+def test_other_agents_and_off_contract_replies_pass_whole(
     tmp_path: Path, agent: str, message: str
 ) -> None:
     assert _digest(tmp_path, agent, message) is None
     assert not (tmp_path / "docs").exists()
+
+
+@pytest.mark.parametrize(
+    ("agent", "message"),
+    [
+        ("coder", "## Receipts\n- a.py:1\n[STATUS: COMPLETE] files=a.py"),
+        ("verifier", f"{VERIFIED}\ncorrected=0\n{VERIFIED}"),
+    ],
+)
+def test_a_short_reply_passes_whole_and_is_saved(tmp_path: Path, agent: str, message: str) -> None:
+    # issue 216: a digest no shorter than the reply still leaves the reply on disk.
+    assert _digest(tmp_path, agent, message) is None
+    folder = tmp_path / "docs/.tmp/daedalus" / TRAIN / "evidence/replies"
+    saved = folder / f"{agent}-a1c64c2e-20261102T010203000000Z.md"
+    assert [p.name for p in folder.iterdir()] == [saved.name]
+    assert saved.read_text(encoding="utf-8") == message
