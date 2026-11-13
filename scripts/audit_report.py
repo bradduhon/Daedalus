@@ -142,7 +142,8 @@ def _who(rec: dict[str, object], labels: dict[str, str]) -> str:
 
 
 def _timeline(records: list[dict[str, object]], labels: dict[str, str]) -> list[str]:
-    # D5: the raw agent id trails as the grep key. 0114: a start opens a row; a stop closes its id's newest open row, else opens a resume row.
+    # D5: the raw agent id trails as the grep key.
+    # 0114: a start opens a row; a stop closes its id's newest open row, else opens a resume row.
     rows: list[dict[str, object]] = []
     open_rows: dict[str, dict[str, object]] = {}
     stopped: set[str] = set()
