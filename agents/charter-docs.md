@@ -59,3 +59,6 @@ Your reply ends with exactly one of these, nothing after it.
 - `[STATUS: LEDGER_MISMATCH] expected=<n> ledger=<m>`
 - `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`
 - `[STATUS: BLOCKED] <detail>`
+- `[STATUS: HANDOFF] path=<path>` when the context limit stops the work.
+
+If a call is refused because the context is past its limit, stop the work. Write the hand-off to the path the refusal names with the Write tool, holding what is done, what is left, the files touched, the next step and any open question. Then hand back with the last line `[STATUS: HANDOFF] path=<path>`, nothing after it.

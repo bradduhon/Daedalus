@@ -90,5 +90,6 @@
     "Policy as code": "opus",
     "Plumbing": "sonnet",
     "Mechanical": "haiku"
-  }
+  },
+  "context_limit": 250000
 }

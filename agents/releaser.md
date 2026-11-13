@@ -63,3 +63,6 @@ Your reply ends with exactly one of these, nothing after it.
 - `[STATUS: PUSHED] branch=<b> pr=<url>`
 - `[STATUS: CI] run=<id> conclusion=<text>`
 - `[STATUS: BLOCKED] <precondition that failed>`
+- `[STATUS: HANDOFF] inline` when the context limit stops the work.
+
+If a call is refused because the context is past its limit, stop the work. Hand back at once with a `## Hand-off` section holding what is done, what is left, the files read or touched, the next step and any open question. Then end with the last line `[STATUS: HANDOFF] inline`, nothing after it.

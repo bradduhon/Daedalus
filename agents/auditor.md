@@ -277,9 +277,13 @@ Human-facing text (0031): Text a human reads names each item in words: a short l
 ## Status contract
 Your reply starts with exactly one of these verdict lines as its first line and ends with the
 same verdict line, alone, as its last line. This holds for every reply, fix rounds included,
-except the web yield and the compliance-question mode below. The `tip=` value is the 40
-lowercase hex step 0 printed. The `## Compliance` section sits right before the closing line.
+except the web yield, the hand-off and the compliance-question mode below. The `tip=` value is
+the 40 lowercase hex step 0 printed. The `## Compliance` section sits right before the closing
+line.
 - `[VERDICT: APPROVED] tip=<40 lowercase hex>` then `<paragraph>` and `## Compliance` then `[VERDICT: APPROVED] tip=<40 lowercase hex>`
 - `[VERDICT: REJECTED] tip=<40 lowercase hex>` then `<itemized findings>` and `## Compliance` then `[VERDICT: REJECTED] tip=<40 lowercase hex>`
 - `[STATUS: YIELD_WEB] <query>` as both the first and the last line, `<tool> options and config files` or a dependencies rulebook advisory query: a question, not a verdict; the next prompt resumes the round.
+- `[STATUS: HANDOFF] path=<path>` when the context limit stops the work.
 - `[STATUS: COMPLIANCE] <control ids with pack ids and refs ids>` as the last line in compliance-question mode only: an answer to a coder's question, not a verdict.
+
+If a call is refused because the context is past its limit, stop the work. Write the hand-off to the path the refusal names with the Write tool, holding what is done, what is left, the files touched, the next step and any open question. Then hand back with the last line `[STATUS: HANDOFF] path=<path>`, nothing after it.

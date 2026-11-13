@@ -510,10 +510,12 @@ def test_routed_agent_judge_exception_blocks_and_records(
     def _boom(*_args: Any) -> Any:
         raise RuntimeError("router exploded")
 
-    from lib import router
+    from lib import handoff, router
 
     _in_train(project_data)
     monkeypatch.setattr(router, "route", _boom)
+    # 0284: the context limit is off, so the router is the first to decide.
+    monkeypatch.setattr(handoff, "limit_for", lambda _config: None)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input(**AUDITOR))))
     assert enforce_agent_jail.main() == 2
     err = capsys.readouterr().err

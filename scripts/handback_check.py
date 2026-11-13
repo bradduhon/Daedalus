@@ -294,9 +294,54 @@ def _unit_root(hook_input: dict[str, object]) -> Path | None:
     return Path(path) if isinstance(path, str) and Path(path).is_absolute() else Path(cwd)
 
 
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+_HANDOFF_HOLDS = (
+    "what is done, what is left, the files read or touched, the next step and any open question"
+)
+
+
+def handoff_problem(hook_input: dict[str, object], agent: str, reply: str) -> str | None:
+    # 0284: an agent with Write names its own hand-off file; one without carries it inline.
+    from lib import handoff
+
+    lines = [line.strip() for line in reply.splitlines() if line.strip()]
+    if handoff.holds_write(agent, PLUGIN_ROOT):
+        path = handoff.handoff_path(hook_input)
+        if path is None:
+            return (
+                "the hand-off path cannot be built from this agent's id and working folder. "
+                "Next: hand back with the hand-off inline and tell the operator."
+            )
+        want = f"{handoff.STATUS} path={path}"
+        fix = f"Next: write the hand-off to {path} with the Write tool, then end with `{want}`."
+        if lines[-1] != want:
+            return f"the HANDOFF line is not `{want}`. {fix}"
+        if not handoff.written(path):
+            return f"the hand-off file {path} is missing, empty, a link or not a file. {fix}"
+        return None
+    want = f"{handoff.STATUS} {handoff.INLINE}"
+    fix = (
+        f"Next: end the reply with a `{handoff.HEADING}` section holding {_HANDOFF_HOLDS}, "
+        f"then the line `{want}`."
+    )
+    if lines[-1] != want:
+        return f"the HANDOFF line is not `{want}`. {fix}"
+    if not any(line == handoff.HEADING for line in lines[:-2]):
+        return f"the reply has no `{handoff.HEADING}` heading with a line under it. {fix}"
+    return None
+
+
 def judge(hook_input: dict[str, object]) -> str | None:
+    from lib import handoff
+    from lib.train_scope import KNOWN_AGENTS
+
     reply = _reply(hook_input)
     agent = _agent(hook_input) if isinstance(reply, str) and reply else ""
+    last = [line.strip() for line in str(reply).splitlines() if line.strip()][-1:]
+    if agent in KNOWN_AGENTS - {"main"} and last and last[0].startswith(handoff.STATUS):
+        # 0284: judged before the judges' checks, so a HANDOFF reply leaves no pass marker.
+        found = handoff_problem(hook_input, agent, str(reply))
+        return None if found is None else f"Daedalus hand-back check: {found}"
     if agent in (VERIFIER, AUDITOR):
         stop = hook_input.get("hook_event_name") == "SubagentStop"
         if stop and relayed(hook_input, str(reply)):

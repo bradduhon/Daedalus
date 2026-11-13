@@ -230,4 +230,7 @@ under the `## Receipts` block of step 6; a yield line needs no block.
 - `[STATUS: YIELD_COMPLIANCE] <question>`
 - `[STATUS: YIELD_STANDARDS] <question>`
 - `[STATUS: YIELD_GRANT] <exact command> | <why>`
+- `[STATUS: HANDOFF] path=<path>` when the context limit stops the work.
 - `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>`, optionally followed by ` adversarial=pass` and then ` audit_tests=pass`, then ` hunt=<n>` on a unit the build-only-the-ask section binds (227), and always ending with ` turns=<n>` (item 15)
+
+If a call is refused because the context is past its limit, stop the work. Write the hand-off to the path the refusal names with the Write tool, holding what is done, what is left, the files touched, the next step and any open question. Then hand back with the last line `[STATUS: HANDOFF] path=<path>`, nothing after it.

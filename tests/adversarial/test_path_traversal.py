@@ -9,6 +9,8 @@ import pytest
 
 from tests.adversarial.corpus import (
     CREDENTIAL,
+    HANDOFF_TOOL_FORMS,
+    HANDOFF_WRITE_PATHS,
     OUTSIDE,
     PREPUSH2_ARCHIVE_WRITES,
     PREPUSH_IGNORE_WRITES,
@@ -18,6 +20,7 @@ from tests.adversarial.corpus import (
     assert_store_read_denied,
 )
 from tests.conftest import CFG, CWD, WT
+from tests.handoff_cases import AGENT_ID, OTHER_ID, assert_refused, check, make_case
 from tests.hook_chain import decide
 from tests.payloads import _b, _cred, _w
 
@@ -194,3 +197,30 @@ def test_planner_write_leaving_a_folder_runs_output_folder_is_denied(
     assert_denied(write, "is outside the repository. Next: write under")
     plan = _cred("planner", "Write", str(root), file_path=f"{out}/plan-x.md", content="x")
     assert decide(plan, CFG).allow
+
+
+def _fill(text: str, h: Path) -> str:
+    return text.format(h=h, d=h.parent, name=h.parent.name, id=AGENT_ID, other=OTHER_ID)
+
+
+@pytest.mark.parametrize("template", HANDOFF_WRITE_PATHS)
+def test_a_write_past_the_limit_off_the_handoff_path_is_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template: str
+) -> None:
+    # 0284: the path must equal the hand-off file as written; no form that resolves to it counts.
+    case = make_case(tmp_path, monkeypatch)
+    h = case.handoff()
+    write = {"file_path": _fill(template, h), "content": "x"}
+    assert_refused(check(case.payload("coder", "Write", write)))
+    assert check(case.payload("coder", "Write", {"file_path": str(h), "content": "x"})).text
+
+
+@pytest.mark.parametrize(("tool", "fields"), HANDOFF_TOOL_FORMS, ids=lambda v: str(v)[:24])
+def test_a_call_past_the_limit_other_than_the_handoff_write_is_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str, fields: dict[str, object]
+) -> None:
+    # 0284: one typed row, Write by exact name and file_path; every other call is refused.
+    case = make_case(tmp_path, monkeypatch)
+    h = case.handoff()
+    filled = {k: _fill(v, h) if isinstance(v, str) else v for k, v in fields.items()}
+    assert_refused(check(case.payload("orchestrator", tool, filled)))

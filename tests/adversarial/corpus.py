@@ -45,6 +45,39 @@ CODER_REFUSED = "Refused: "
 
 # 233: a refused write a sealed pass admits exactly once, then refused again; (agent, form).
 S2B_PASS_ONCE = ("verifier", "sort -o {repo}/out.txt {repo}/in.txt")
+# 0284: Write paths past the context limit that are not the hand-off file {h} in folder {d}.
+HANDOFF_WRITE_PATHS = (
+    "{d}/../{name}/{id}.md",
+    "{d}/./{id}.md",
+    "{d}//{id}.md",
+    "{h}/",
+    "{d}/{id}.md/",
+    "{id}.md",
+    "handoffs/{id}.md",
+    "{h}.bak",
+    "{d}/{other}.md",
+    "{d}",
+    "{d}/",
+)
+# 0284: calls past the context limit that only the one Write row could admit; none matches it.
+HANDOFF_TOOL_FORMS = (
+    ("Read", {"file_path": "{h}"}),
+    ("Edit", {"file_path": "{h}", "old_string": "a", "new_string": "b"}),
+    ("MultiEdit", {"file_path": "{h}", "edits": []}),
+    ("NotebookEdit", {"notebook_path": "{h}", "new_source": "x"}),
+    ("Bash", {"command": "cat {h}"}),
+    ("Bash", {"command": "echo x > {h}"}),
+    ("Bash", {"command": "ls"}),
+    ("Agent", {"prompt": "write {h}", "subagent_type": "coder"}),
+    ("SendMessage", {"to": "x", "message": "{h}"}),
+    ("write", {"file_path": "{h}", "content": "x"}),
+    ("WRITE", {"file_path": "{h}", "content": "x"}),
+    ("Write ", {"file_path": "{h}", "content": "x"}),
+    ("mcp__fs__write_file", {"path": "{h}", "content": "x"}),
+    ("Glob", {"pattern": "*", "path": "{d}"}),
+    ("Grep", {"pattern": "x", "path": "{h}"}),
+    ("WebFetch", {"url": "https://example.com", "prompt": "x"}),
+)
 
 
 # issue 80 (unit H1): env -S hides a write inside one word; {repo} is a repository a train marks.
