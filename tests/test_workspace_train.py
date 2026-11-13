@@ -1425,6 +1425,11 @@ def test_release_names_a_squash_merge_plainly(repo: Path) -> None:
     assert "Daedalus expects the pull request merged with a merge commit" in refused.stderr
     assert "cannot tell a squashed or rebased pull request" in refused.stderr
     assert refused.stderr.count("Next:") == 1
+    assert (
+        "squashed or rebased there is no such commit, so release this one by the plain path, "
+        "daedalus_workspace.py release --merge-sha <sha> --notes-file <pull request body file>, "
+        "and allow merge commits only in the repository settings before the next run."
+    ) in " ".join(refused.stderr.split())
     assert not _notes(repo).exists()
     assert "release" not in train_state.load(repo, TRAIN)
 

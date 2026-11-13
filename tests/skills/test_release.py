@@ -191,6 +191,11 @@ def test_push_skill_hand_off_names_the_release_step() -> None:
     # 130: a plain-branch merge names its pull request body file instead of a summary.
     assert RELEASE_CMD.replace("<merge sha>`", "<merge sha> --notes-file <body file>`") in hand_off
     assert "docs/.tmp/daedalus/releases/v<version>/release-notes.md" in hand_off
+    # 0282: the plain path has no run tip, so it checks only that the sha is on the base.
+    assert (
+        "This path checks only that the sha is on the base branch, because a plain branch has "
+        "no recorded run tip."
+    ) in hand_off
     assert "After the operator reports the merge" in hand_off
     assert "`Version class: <version> <X, Y or Z>: <one-line reason>`" in hand_off
     assert "`Migration: <what an operator edits>`" in hand_off

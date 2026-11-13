@@ -1530,8 +1530,10 @@ def _run_on_base(repo: Path, train_id: str, state: dict[str, object], sha: str, 
                 "rebase merge keeps none of them. This step reads git alone, so it cannot tell a "
                 "squashed or rebased pull request from a sha that is not this run's merge. "
                 f"Next: rerun with the sha of the merge commit on {base} that has {tip[:12]} as "
-                "a parent; when the pull request was squashed or rebased there is none, so allow "
-                "merge commits only in the repository settings before the next run."
+                "a parent; when the pull request was squashed or rebased there is no such commit, "
+                "so release this one by the plain path, daedalus_workspace.py release "
+                "--merge-sha <sha> --notes-file <pull request body file>, and allow merge commits "
+                "only in the repository settings before the next run."
             )
 
 
