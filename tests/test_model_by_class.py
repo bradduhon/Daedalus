@@ -84,6 +84,20 @@ def test_the_class_picks_coder_and_verifier_at_zero_one_and_two_refutations(
     assert third.lines == ["route U2: operator model=opus refutations=3 checks=0"]
 
 
+@pytest.mark.parametrize(
+    "name", ["Injection sinks", "Isolation and confinement", "Supply chain", "Redaction"]
+)
+def test_a_unit_of_a_0285_class_gets_opus_from_the_model_command(
+    repo: Path,  # noqa: F811
+    name: str,
+) -> None:
+    _model_train(repo, block=CLASSED.replace("class: AuthN", f"class: {name}"))
+    for agent in ("coder", "verifier"):
+        code, lines = _model(repo, agent, "U2")
+        assert code == 0 and lines[0] == "opus"
+        assert lines[1] == f"{agent} U2: opus | class: {name} | class_reason: {REASON}"
+
+
 def test_the_coder_call_records_its_model_once_and_the_verifier_call_records_nothing(
     repo: Path,  # noqa: F811
 ) -> None:
@@ -159,9 +173,18 @@ def test_an_unknown_unit_and_a_run_with_no_plan_are_refused(repo: Path) -> None:
     assert "Next: record the plan" in lines[0]
 
 
-def test_model_unit_takes_only_the_coder_and_the_verifier(repo: Path) -> None:  # noqa: F811
+def test_model_unit_takes_only_the_coder_the_verifier_and_the_auditor(
+    repo: Path,  # noqa: F811
+) -> None:
     _model_train(repo, block=CLASSED)
-    for agent in ("planner", "auditor"):
+    for agent in ("planner", "orchestrator"):
         code, lines = _model(repo, agent, "U1")
-        assert code == 1 and "model --unit picks a coder's or a verifier's model" in lines[0]
+        assert (
+            code == 1 and "model --unit picks a coder's, a verifier's or an auditor's" in lines[0]
+        )
         assert "Next:" in lines[0]
+    # 0280: the auditor's compliance question takes the asking unit's class, merged or not.
+    assert _model(repo, "auditor", "U2") == (
+        0,
+        ["opus", U2_LINE.format(agent="auditor", model="opus")],
+    )

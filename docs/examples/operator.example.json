@@ -65,6 +65,22 @@
       "definition": "The work builds or changes the rules a security scanner or guard enforces, the scanner's configuration, and any exception to or skip of a rule."
     },
     {
+      "name": "Injection sinks",
+      "definition": "The work builds or changes where data from outside reaches a query, a shell command, a file path, a template or a deserializer."
+    },
+    {
+      "name": "Isolation and confinement",
+      "definition": "The work builds or changes what keeps one process, tenant or agent from reaching another's files, memory or network, such as sandboxes, jails, containers and process limits."
+    },
+    {
+      "name": "Supply chain",
+      "definition": "The work builds or changes which outside code and tools a project takes in and how it ships, such as dependency versions and sources, the build and release pipeline and artifact signing."
+    },
+    {
+      "name": "Redaction",
+      "definition": "The work builds or changes what keeps secrets and sensitive values out of logs, errors and output."
+    },
+    {
       "name": "Plumbing",
       "definition": "The work builds or changes none of the things another class names, including work that only uses one of them."
     },
@@ -88,6 +104,10 @@
     "Network exposure": "opus",
     "Audit trail": "opus",
     "Policy as code": "opus",
+    "Injection sinks": "opus",
+    "Isolation and confinement": "opus",
+    "Supply chain": "opus",
+    "Redaction": "opus",
     "Plumbing": "sonnet",
     "Mechanical": "haiku"
   },

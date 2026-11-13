@@ -4,6 +4,7 @@
 # checks of the two personal settings and the one lookup of a class's model.
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from lib.agent_models import MODELS
@@ -68,6 +69,25 @@ DEFAULT_CLASSES: tuple[tuple[str, str], ...] = (
         "Policy as code",
         _BUILDS + "the rules a security scanner or guard enforces, the scanner's "
         "configuration, and any exception to or skip of a rule.",
+    ),
+    (
+        "Injection sinks",
+        _BUILDS + "where data from outside reaches a query, a shell command, a file path, a "
+        "template or a deserializer.",
+    ),
+    (
+        "Isolation and confinement",
+        _BUILDS + "what keeps one process, tenant or agent from reaching another's files, "
+        "memory or network, such as sandboxes, jails, containers and process limits.",
+    ),
+    (
+        "Supply chain",
+        _BUILDS + "which outside code and tools a project takes in and how it ships, such as "
+        "dependency versions and sources, the build and release pipeline and artifact signing.",
+    ),
+    (
+        "Redaction",
+        _BUILDS + "what keeps secrets and sensitive values out of logs, errors and output.",
     ),
     (
         PLUMBING,
@@ -167,6 +187,12 @@ MODEL_RANK = ("haiku", "sonnet", "opus", "fable")
 def above_middle(name: str, operator: Operator) -> bool:
     # 0274: a class whose model ranks above the middle model needs a place and a reason.
     return MODEL_RANK.index(model_for(name, operator)) > MODEL_RANK.index(MIDDLE_MODEL)
+
+
+def highest(names: Sequence[str], operator: Operator) -> int:
+    """0280: the index of the first class whose model ranks highest; names is never empty."""
+    ranks = [MODEL_RANK.index(model_for(name, operator)) for name in names]
+    return ranks.index(max(ranks))
 
 
 def classes_json(rows: tuple[tuple[str, str], ...] = DEFAULT_CLASSES) -> list[dict[str, str]]:

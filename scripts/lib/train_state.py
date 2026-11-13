@@ -56,6 +56,10 @@ AUDIT, AUDIT_SUFFIX = "audit", "-audit"
 _AUDIT_NAME = re.compile(rf"{TRAIN_ID.pattern}{AUDIT_SUFFIX}")
 # 0271: {"<unit id>": {"fixes": [ids], "findings": [keys], "round": n} or {"rows": [n], "seq": s}}.
 FIX_UNITS = "fix_units"
+# 0280: {"round": n, "units": {"<unit id>": {"planned", "class", "place", "raised"}}}.
+CLASS_CHECK = "class_check"
+# 0280: {"model", "class", "unit", "raised_from"}, the audit's model and the unit that set it.
+AUDITOR_MODEL = "auditor_model"
 # 0284: on a unit, {"<agent id>": {"tokens": n} or {"reason": label}} at the agent's last return.
 SIZES = "context_sizes"
 # 0284: on a unit, [{"old", "tokens", "file", "new"}] in order; run-wide for an agent with no unit.
