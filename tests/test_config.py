@@ -275,22 +275,22 @@ def test_model_agents_refuses_anything_but_an_object(project_data: Path, value: 
         _load(project_data, {"models": {"agents": value}})
 
 
-def test_coder_models_default_and_partial(project_data: Path) -> None:
-    # 0187: a coder key left out or null keeps its tier's default.
-    want = {"default": "sonnet", "control_path": "opus", "escalated": "opus"}
-    assert Config().coder_models == want
-    assert _load(project_data, {"models": {"coder": None}}).coder_models == want
-    doc: dict[str, object] = {"models": {"coder": "opus", "coder_after_rejection": "fable"}}
-    got = _load(project_data, doc).coder_models
-    assert got == {"default": "opus", "control_path": "opus", "escalated": "fable"}
+RETIRED = ("coder", "plugin_file_coder", "coder_after_rejection")
 
 
-@pytest.mark.parametrize("model", ["gpt-4", "Opus", "claude-opus-4-8", "", 1])
-def test_coder_models_refuses_an_unknown_model(project_data: Path, model: object) -> None:
-    # 0187: the dispatch gate admits only the four model words, so a full id is refused here.
+def test_a_schema_1_file_holding_the_retired_coder_keys_still_loads(project_data: Path) -> None:
+    # 332: the schema map drops the three keys when an older file is read, so no run stops.
+    models = {key: "opus" for key in RETIRED} | {"fable_available": True}
+    cfg = _load(project_data, {"schema": 1, "models": models})
+    assert cfg.fable_available is True
+
+
+@pytest.mark.parametrize("key", RETIRED)
+def test_a_current_schema_file_refuses_a_retired_coder_key(project_data: Path, key: str) -> None:
+    # 332: no alias; at schema 2 the key is unknown, and the refusal lists the valid names.
     with pytest.raises(ConfigError) as info:
-        _load(project_data, {"models": {"coder": model}})
-    assert "Next: set models.coder to one of sonnet, opus, haiku, fable" in str(info.value)
+        _load(project_data, {"schema": 2, "models": {key: "opus"}})
+    assert f"unknown keys ['{key}']" in str(info.value) and "fable_available" in str(info.value)
 
 
 def test_missing_data_dir_gives_empty_config(repo_cwd: Path) -> None:

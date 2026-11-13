@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "local_docs_folder": null,
   "git_excluded_folders": [
     {"kind": "path", "path": "<repo_root>/private/"},
@@ -13,9 +13,6 @@
   "personal_overrides": {"reading_level": "expert"},
   "models": {
     "agents": {"planner": "sonnet"},
-    "coder": "sonnet",
-    "plugin_file_coder": "opus",
-    "coder_after_rejection": "opus",
     "fable_available": false
   },
   "limits": {

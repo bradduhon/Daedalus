@@ -224,7 +224,7 @@ def test_config_carries_rows_and_group_members(wizard: Path, home: Path) -> None
     assert dropped == {
         "charter_root": "no longer a setting",
         "coding_rules[1]": "this version refuses its value",
-        "models.coder": "this version refuses its value",
+        "models.coder": "no longer a setting",
     }
     config = load_config(path=path)
     assert [s.name for s in config.standards_sources] == ["baseline"]

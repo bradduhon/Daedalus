@@ -64,6 +64,8 @@ AUDITOR_MODEL = "auditor_model"
 SIZES = "context_sizes"
 # 0284: on a unit, [{"old", "tokens", "file", "new"}] in order; run-wide for an agent with no unit.
 HANDOFFS = "handoffs"
+# 324: on a unit, {"branch", "contract", "standards"} from its newest coder COMPLETE line.
+COMPLETION = "completion"
 # 0284: on a unit, the agents resumed once for the hand-off write.
 HANDOFF_RESUMES = "handoff_resumes"
 

@@ -30,6 +30,7 @@ from lib.config import (  # noqa: E402
 from lib.project_root import in_git_work_tree, project_root  # noqa: E402
 from lib.shell import _under  # noqa: E402
 from lib.train_state import folder_output  # noqa: E402
+from lib.workspace import plugin_folder_overlap  # noqa: E402
 
 # 22: the --help text, kept below the future import as a plain string.
 DESCRIPTION = (
@@ -67,6 +68,10 @@ R_OUTPUT_PROTECTED = (
     "service-manifest.json, the decisions file or a prohibited_writes entry (0054, D.5). Next: "
     "name a "
     "folder that holds no protected path."
+)
+R_OUTPUT_PLUGIN = (
+    "output folder {out} is, sits inside or holds {place}, a folder the plugin keeps its own "
+    "files in (327). Next: name an output folder apart from {place}, then freeze again."
 )
 R_OUTPUT_UNCHECKED = (
     "output folder {out} could not be checked against the protected paths ({cause}). "
@@ -263,6 +268,9 @@ def output_dir_reason(out: str, repo: Path, boundary: jail.CoderBoundary | str) 
     # D.5: output_dir bounds every document agent write, so it sits inside the project,
     # below its root, and neither is nor holds a path the coder write check protects.
     real, root = os.path.realpath(out), os.path.realpath(repo)
+    place = plugin_folder_overlap(real)
+    if place is not None:
+        return R_OUTPUT_PLUGIN.format(out=out, place=place)
     # issue 48: a folder run's checked output folder outside the root is the one bound allowed
     # there; inside the root the checks below still bind it.
     if real == folder_output(repo) and not real.startswith(root + os.sep):

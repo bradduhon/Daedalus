@@ -92,7 +92,7 @@ def test_models_agents_row_names_the_catalog_models() -> None:
     models = KEY_ROWS[(CONFIG_FILE, "models.agents")]
     assert models.kind == "object" and models.default.startswith("`{}`") and models.override
     assert '`"sonnet"`, `"opus"`, `"haiku"` or `"fable"`' in models.values
-    # 0187: inside a run models.coder sets the coder, so the example names another agent.
+    # 0187: inside a run a unit's class sets the coder, so the example names another agent.
     assert models.example == '`{"planner": "sonnet"}`'
 
 
