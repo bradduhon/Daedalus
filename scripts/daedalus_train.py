@@ -23,6 +23,7 @@ from lib.passes import PassError, write_pass  # noqa: E402
 from lib.passes import load as load_pass  # noqa: E402
 from lib.project_root import project_root, repo_refusal  # noqa: E402
 from lib.train_runner import (  # noqa: E402
+    AUDITOR_AGENT,
     EXIT_ASK,
     EXIT_OK,
     EXIT_ROUTED,
@@ -32,14 +33,17 @@ from lib.train_runner import (  # noqa: E402
     Outcome,
     RunnerError,
     _unit_record,
+    auditor_model,
     check_reply,
     choice,
+    class_check_input,
     contract,
     dispatch_unit,
     finish_unit,
     fix_unit,
     progress,
     reaudit,
+    record_class_check,
     record_docs_verdict,
     record_exception,
     record_ledger,
@@ -64,8 +68,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
-        "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch, route, "
-        "finish-unit, fix-unit, providers, validate. "
+        "class-check, brief-check, ask-check, packs, writer-clear, assets, refuted, grant, "
+        "dispatch, route, finish-unit, fix-unit, providers, validate. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -138,6 +142,10 @@ def _parser() -> argparse.ArgumentParser:
     # 0267: --unit picks a coder's or a verifier's model from the unit's class; the coder's is
     # recorded on the unit.
     model.add_argument("--unit")
+    # 0280: --agent auditor --class-check prints the class check's model and its input lines.
+    model.add_argument("--class-check", dest="class_check", action="store_true")
+    # 0280: the class check's file read, its classes held to the settings, and recorded.
+    sub.add_parser("class-check").add_argument("--repo", type=Path, required=True)
     # issue 187: one REFUTED verifier reply recorded on the unit.
     refute = sub.add_parser("refuted")
     refute.add_argument("--repo", type=Path, required=True)
@@ -425,7 +433,27 @@ def _writer_clear(repo: Path) -> Outcome:
     return Outcome(EXIT_OK, [f"writer queue cleared train={train} removed={removed}"])
 
 
-def _model(repo: Path, agent: str, override: str | None, unit: str | None = None) -> Outcome:
+def _model(
+    repo: Path,
+    agent: str,
+    override: str | None,
+    unit: str | None = None,
+    class_check: bool = False,
+) -> Outcome:
+    if class_check:
+        if agent != AUDITOR_AGENT or unit is not None or override is not None:
+            return Outcome(
+                EXIT_STOP,
+                [
+                    "model --class-check names the auditor's class check model and takes no "
+                    "--unit or --override. Next: rerun it as model --agent auditor --class-check."
+                ],
+            )
+        return class_check_input(repo)
+    # 0280: inside a run the auditor's model is the highest class among the merged units.
+    if agent == AUDITOR_AGENT and unit is None and override is None:
+        if active_train(project_root(repo)) is not None:
+            return auditor_model(repo)
     if unit is not None:
         if agent not in UNIT_AGENTS or override is not None:
             return Outcome(
@@ -548,7 +576,9 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "summary":
         return summary(repo)
     if args.action == "model":
-        return _model(repo, args.agent, args.override, args.unit)
+        return _model(repo, args.agent, args.override, args.unit, args.class_check)
+    if args.action == "class-check":
+        return record_class_check(repo)
     if args.action == "refuted":
         return refuted(repo, args.unit, args.operator_check)
     if args.action == "brief-check":

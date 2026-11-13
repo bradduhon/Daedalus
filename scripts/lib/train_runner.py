@@ -1522,13 +1522,30 @@ _MODEL_SETTINGS_NEXT = (
 )
 
 
+def _class_settings(repo: Path, rerun: str = "model") -> operator_file.Operator:
+    try:
+        return operator_file.load(repo)
+    except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
+        next_line = _MODEL_SETTINGS_NEXT.replace("rerun model.", f"rerun {rerun}.")
+        raise RunnerError(f"{exc}\n{next_line}") from exc
+
+
+def _unit_class(planned: plan_record.Unit, operator: operator_file.Operator) -> str:
+    # 0270: a class the plan names and the settings no longer hold is refused, never the middle.
+    name = planned.effective_class
+    if planned.work_class is not None and name not in {n for n, _ in operator.work_classes}:
+        raise RunnerError(
+            f"unit {planned.id} names the class {name}, which the work classes settings no "
+            f"longer hold. Next: add {name} back to work_classes, or give unit {planned.id} "
+            "a class the settings hold and record the plan again."
+        )
+    return name
+
+
 def unit_model(cwd: Path, agent: str, unit_id: str) -> Outcome:
     # 0267, 0270: the unit's class and the mapping pick the model; the coder's is recorded.
     def edit(repo: Path, train_id: str) -> list[str]:
-        try:
-            operator = operator_file.load(repo)
-        except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
-            raise RunnerError(f"{exc}\n{_MODEL_SETTINGS_NEXT}") from exc
+        operator = _class_settings(repo)
         try:
             state = train_state.load(repo, train_id)
             if not train_state.record(state, train_state.PLAN):
@@ -1539,13 +1556,7 @@ def unit_model(cwd: Path, agent: str, unit_id: str) -> Outcome:
             _, planned = _planned(state, unit_id)
         except workspace.WorkspaceError as exc:
             raise RunnerError(str(exc)) from exc
-        name = planned.effective_class
-        if planned.work_class is not None and name not in {n for n, _ in operator.work_classes}:
-            raise RunnerError(
-                f"unit {planned.id} names the class {name}, which the work classes settings no "
-                f"longer hold. Next: add {name} back to work_classes, or give unit {planned.id} "
-                "a class the settings hold and record the plan again."
-            )
+        name = _unit_class(planned, operator)
         model = work_classes.model_for(name, operator)
         reason = f" | class_reason: {planned.class_reason}" if planned.class_reason else ""
         line = f"{agent} {planned.id}: {model} | class: {name}{reason}"
@@ -1568,6 +1579,244 @@ def unit_model(cwd: Path, agent: str, unit_id: str) -> Outcome:
 
         train_state.change(repo, train_id, add)
         return [model, line]
+
+    return _recorded(cwd, edit)
+
+
+CLASS_CHECK_FILE = "class-check.txt"
+CLASS_OK = "class ok"
+# 0280: the finding class and severity of a unit the class check raised.
+CLASS_FINDING, CLASS_SEVERITY = "work-class", "high"
+_SEP = " | "
+
+
+def class_check_path(repo: Path, train_id: str) -> Path:
+    # 0280: the one path the class check writes, inside the auditor's audit folder.
+    return _scratch(repo, train_id) / "audit" / CLASS_CHECK_FILE
+
+
+def _merged_units(
+    repo: Path, train_id: str, state: dict[str, object]
+) -> list[tuple[plan_record.Unit, dict[str, object]]]:
+    # 0280: plan units, fix units included, whose branch is in daedalus/<train-id>, in plan order.
+    plan = workspace._recorded_plan(state)
+    recorded = {
+        workspace._unit_label(train_id, _text(u, "name")).casefold(): u
+        for u in train_state.units(state)
+        if not train_state.is_audit_unit(u)
+    }
+    integration = f"refs/heads/daedalus/{train_id}"
+    merged: list[tuple[plan_record.Unit, dict[str, object]]] = []
+    for planned in plan.units:
+        unit = recorded.get(planned.id.casefold())
+        branch = _text(unit, "branch") if unit is not None else ""
+        # 0024: a recorded branch never becomes a git option.
+        if unit is None or not branch or branch.startswith("-"):
+            continue
+        try:
+            done = git.run(["merge-base", "--is-ancestor", branch, integration], repo)
+        except (OSError, git.GitTimeout) as exc:
+            raise RunnerError(
+                f"git merge-base did not finish for unit {planned.id} ({exc}). "
+                "Next: check git from your own shell, then rerun model."
+            ) from exc
+        if done.returncode == 0:
+            merged.append((planned, unit))
+    return merged
+
+
+def _audit_units(
+    repo: Path,
+    train_id: str,
+    state: dict[str, object],
+    operator: operator_file.Operator,
+    rerun: str,
+) -> list[tuple[plan_record.Unit, dict[str, object], str]]:
+    # 0280: the merged units the audit judges, each with its class; none is refused.
+    if not train_state.record(state, train_state.PLAN):
+        raise RunnerError(
+            f"run {train_id} records no plan, so no merged unit has a class. Next: record the "
+            f"plan with daedalus_train.py plan --path, then rerun {rerun}."
+        )
+    try:
+        merged = _merged_units(repo, train_id, state)
+    except workspace.WorkspaceError as exc:
+        raise RunnerError(str(exc)) from exc
+    if not merged:
+        raise RunnerError(
+            f"no unit of run {train_id} is merged into daedalus/{train_id}, so the audit has no "
+            f"class to read. Next: merge the verified units with finish-unit, then rerun {rerun}."
+        )
+    return [(planned, unit, _unit_class(planned, operator)) for planned, unit in merged]
+
+
+def _raised(check: dict[str, object]) -> dict[str, dict[str, object]]:
+    # 0280: the class check's units it found under-classed, by unit id.
+    units = _obj(check, "units")
+    return {uid: _obj(units, uid) for uid in units if _obj(units, uid).get("raised") is True}
+
+
+def raised_key(place: str) -> str:
+    # 0280, agents/auditor.md Finding format 4: the no-test key `<file>:<named part> <class>`.
+    return f"{place} {CLASS_FINDING}"
+
+
+def auditor_model(cwd: Path) -> Outcome:
+    # 0280: the model of the highest class among the merged units, the class check's raise counted.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        operator = _class_settings(repo)
+        state = train_state.load(repo, train_id)
+        merged = _audit_units(repo, train_id, state, operator, "model")
+        held = {n for n, _ in operator.work_classes}
+        # (unit, class, line tail, planned class when the class check raised it)
+        rows: list[tuple[str, str, str, str | None]] = []
+        for planned, _, name in merged:
+            reason = f" | class_reason: {planned.class_reason}" if planned.class_reason else ""
+            rows.append((planned.id, name, reason, None))
+        ids = {planned.id for planned, _, _ in merged}
+        for uid, raised in _raised(train_state.record(state, train_state.CLASS_CHECK)).items():
+            name, was = _text(raised, "class"), _text(raised, "planned")
+            if uid not in ids:
+                continue
+            if name not in held:
+                raise RunnerError(
+                    f"the class check raised unit {uid} to the class {name}, which the work "
+                    f"classes settings no longer hold. Next: add {name} back to work_classes, "
+                    "or run the class check again, then rerun model."
+                )
+            tail = f" | class check: raised from {was} at {_text(raised, 'place')}"
+            rows.append((uid, name, tail, was))
+        top, cls, tail, was_top = rows[work_classes.highest([r[1] for r in rows], operator)]
+        model = work_classes.model_for(cls, operator)
+        entry: dict[str, object] = {"model": model, "class": cls, "unit": top}
+        entry["raised_from"] = was_top
+        train_state.update(repo, train_id, **{train_state.AUDITOR_MODEL: entry})
+        return [model, f"auditor {top}: {model} | class: {cls}{tail}"]
+
+    return _recorded(cwd, edit)
+
+
+def class_check_input(cwd: Path) -> Outcome:
+    # 0280: the class check runs on the top coding model, whatever the units' classes say.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        operator = _class_settings(repo)
+        state = train_state.load(repo, train_id)
+        merged = _audit_units(repo, train_id, state, operator, "model")
+        top = work_classes.TOP_MODEL
+        lines = [
+            top,
+            f"auditor class check: {top} | the top coding model, whatever the units' classes",
+            f"Class check file: {class_check_path(repo, train_id)}",
+        ]
+        for planned, unit, name in merged:
+            files = ", ".join(planned.files)
+            branch = _text(unit, "branch")
+            lines.append(f"Unit: {planned.id} | class: {name} | branch: {branch} | files: {files}")
+        lines += [f"Work class: {n}{_SEP}{d}" for n, d in operator.work_classes]
+        return lines
+
+    return _recorded(cwd, edit)
+
+
+def _check_rows(
+    text: str,
+    where: Path,
+    merged: list[tuple[plan_record.Unit, dict[str, object], str]],
+    operator: operator_file.Operator,
+) -> dict[str, dict[str, object]]:
+    # 0280: one `<unit> | <planned class> | class ok` or `... | <class> | <place>` per merged unit.
+    planned = {p.id.casefold(): (p.id, name) for p, _, name in merged}
+    held = {n for n, _ in operator.work_classes}
+    rerun = "Next: have the auditor rewrite the class check file, then rerun class-check."
+    rows: dict[str, dict[str, object]] = {}
+    places: set[str] = set()
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        cells = [c.strip() for c in line.split(_SEP)]
+        shape_ok = (len(cells) == 3 and cells[2] == CLASS_OK) or len(cells) == 4
+        if not shape_ok or not all(cells) or not line.isprintable():
+            raise RunnerError(
+                f"{where} line {number} is not `<unit> | <planned class> | {CLASS_OK}` or "
+                f"`<unit> | <planned class> | <class> | <file>:<named part>`. {rerun}"
+            )
+        found = planned.get(cells[0].casefold())
+        if found is None or found[0] in rows:
+            what = "names no merged unit" if found is None else "names a unit twice"
+            raise RunnerError(f"{where} line {number} {what}: {cells[0]}. {rerun}")
+        uid, name = found
+        if cells[1] != name:
+            raise RunnerError(
+                f"{where} line {number} gives unit {uid} the planned class {cells[1]}, and the "
+                f"recorded plan gives it {name}. {rerun}"
+            )
+        entry: dict[str, object] = {"planned": name, "class": None, "place": None, "raised": False}
+        if len(cells) == 4:
+            checked, place = cells[2], cells[3]
+            if checked not in held:
+                raise RunnerError(
+                    f"{where} line {number} names the class {checked}, which the work classes "
+                    f"settings do not list (they list {', '.join(sorted(held))}). {rerun}"
+                )
+            file, colon, part = place.partition(":")
+            if checked == name or not (colon and file.strip() and part.strip()):
+                raise RunnerError(
+                    f"{where} line {number} names its own planned class or a place that is not "
+                    f"`<file>:<named part>`. {rerun}"
+                )
+            rank = work_classes.MODEL_RANK.index
+            up = rank(work_classes.model_for(checked, operator)) > rank(
+                work_classes.model_for(name, operator)
+            )
+            if up and place in places:
+                raise RunnerError(f"{where} line {number} raises a second unit at {place}. {rerun}")
+            places |= {place} if up else set()
+            entry.update({"class": checked, "place": place, "raised": up})
+        rows[uid] = entry
+    missing = [uid for uid, _ in planned.values() if uid not in rows]
+    if missing:
+        raise RunnerError(f"{where} names no line for unit {missing[0]}. {rerun}")
+    return rows
+
+
+def record_class_check(cwd: Path) -> Outcome:
+    # 0280: the class check's file read once, its classes held to the settings, then recorded.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        operator = _class_settings(repo, "class-check")
+        state = train_state.load(repo, train_id)
+        merged = _audit_units(repo, train_id, state, operator, "class-check")
+        path = class_check_path(repo, train_id)
+        if path.is_symlink() or not path.is_file():
+            raise RunnerError(
+                f"{path} is not a regular file. Next: have the auditor write the class check "
+                "there, then rerun class-check."
+            )
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise RunnerError(f"cannot read {path} ({exc}). Next: make it a UTF-8 file.") from exc
+        rows = _check_rows(text, path, merged, operator)
+        round_ = derived_round(state)
+        record = {"round": round_, "units": rows}
+        train_state.update(repo, train_id, **{train_state.CLASS_CHECK: record})
+        lines: list[str] = []
+        raised: list[str] = []
+        for uid, entry in rows.items():
+            name = _text(entry, "planned")
+            checked = _text(entry, "class")
+            if not checked:
+                lines.append(f"class check {uid}: {name} | {CLASS_OK}")
+                continue
+            model = work_classes.model_for(checked, operator)
+            mark = " | raised" if entry["raised"] else ""
+            place = _text(entry, "place")
+            lines.append(f"class check {uid}: {name} -> {checked} ({model}) at {place}{mark}")
+            if entry["raised"]:
+                key = raised_key(place)
+                raised.append(f"Class raised: {key}{_SEP}{CLASS_SEVERITY}{_SEP}{CLASS_FINDING}")
+        tail = f"class check: {len(rows)} unit(s), {len(raised)} raised, round {round_}"
+        return [*lines, *raised, tail]
 
     return _recorded(cwd, edit)
 
@@ -2997,6 +3246,28 @@ def _round_findings(
     return found
 
 
+def _class_rows_listed(
+    repo: Path,
+    train_id: str,
+    state: dict[str, object],
+    round_: int,
+    listed: dict[str, audit_rounds.Finding] | None,
+) -> None:
+    # 0280: the round after the class check lists each raised unit's row, so the operator sees it.
+    check = train_state.record(state, train_state.CLASS_CHECK)
+    if _int(check, "round", 0) != round_:
+        return
+    for uid, entry in _raised(check).items():
+        key = raised_key(_text(entry, "place"))
+        if listed is None or key not in listed:
+            raise RunnerError(
+                f"the class check raised unit {uid}, and round {round_} lists no row `{key}"
+                f"{_SEP}{CLASS_SEVERITY}{_SEP}{CLASS_FINDING}`. Next: have the auditor copy each "
+                f"Class raised: row into {findings_path(repo, train_id, round_)}, then rerun "
+                "verdict."
+            )
+
+
 def record_verdict(
     cwd: Path,
     status: str,
@@ -3052,6 +3323,7 @@ def record_verdict(
                 f"--findings {want}."
             )
         listed = _round_findings(repo, train_id, status, round_, findings) if findings else None
+        _class_rows_listed(repo, train_id, state, round_, listed)
         found, named = _auditor_seq(repo, train_id, status, seq)
         current = _integration_tip(repo, train_id)
         if tip is not None:
