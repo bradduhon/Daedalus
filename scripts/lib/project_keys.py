@@ -669,26 +669,31 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (CONFIG_FILE, "models.agents"): KeyRow(
         "Which model each catalog agent runs on, in place of the `model:` line of its agent "
         "file; a model a skill is given for one run still comes first. Inside a run the coding "
-        "agent and the verifier of a unit take their model from the unit's class instead",
+        "agent and the verifier of a unit take their model from the unit's class instead, and "
+        "the auditor the model of the highest class among the merged units after the class check",
         "object",
         f"Keys are agent names the catalog lists; values are {_MODEL_NAMES}; any other name or "
         "value is refused",
         "`{}`: every agent runs on its agent file's model",
         '`{"planner": "sonnet"}`',
-        "Each agent you name runs on the model you give it instead of its own.",
+        "Each agent you name runs on the model you give it instead of its own, except the coding "
+        "agent, the verifier and the auditor inside a run, which take theirs from the classes.",
         ("scripts/lib/agent_models.py", "scripts/daedalus_train.py"),
         override=True,
     ),
     **{(CONFIG_FILE, f"models.{key}"): _coder_row(key) for key in CODER_KEYS},
     (CONFIG_FILE, "models.fable_available"): KeyRow(
-        "Whether your plan offers the Fable model. When it does, the planner and the auditor run "
-        "on Fable unless `models.agents` names them; every other agent keeps its own model",
+        "Whether your plan offers the Fable model. When it does, the planner, and the auditor "
+        "outside a run, run on Fable unless `models.agents` names them; inside a run the auditor "
+        "takes the model of the highest class among the merged units after the class check; "
+        "every other agent keeps its own model",
         "boolean or null",
         "`true`, `false` or `null`; any other value is refused",
         "`null`: Fable is used only when a running train's audit log shows this session "
         "started on it",
         "`true`",
-        "The planner and the auditor run on the Fable model when your plan offers it.",
+        "The planner, and the auditor outside a run, run on the Fable model when your plan "
+        "offers it.",
         ("scripts/lib/fable.py",),
         override=True,
     ),

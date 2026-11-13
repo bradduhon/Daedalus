@@ -255,7 +255,6 @@ def test_a_lower_or_level_class_is_recorded_and_raises_nothing(tmp_path: Path) -
     ("lines", "says"),
     [
         (("U1 | Plumbing | class ok", "U2 | Plumbing | Wizardry | web/u2.html:x"), "Wizardry"),
-        (("U1 | Plumbing | class ok",), "names no line for unit U2"),
         (("U1 | Plumbing | class ok", "U1 | Plumbing | class ok"), "names a unit twice"),
         (("U1 | Plumbing | class ok", "U9 | Plumbing | class ok"), "names no merged unit"),
         (("U1 | AuthN | class ok", "U2 | Plumbing | class ok"), "the planned class AuthN"),
@@ -324,6 +323,78 @@ def test_the_round_after_a_raise_lists_its_row_before_a_verdict_records(tmp_path
     passed = train_runner.record_verdict(root, "rejected", findings=path)
     # Past the class row check, the verdict is read from the auditor's own reply.
     assert passed.code == 1 and "class check" not in passed.lines[0], passed.lines
+
+
+def _findings(root: Path, round_: int, *rows: str) -> Path:
+    path = findings_path(root, TRAIN, round_)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{row}\n" for row in rows), encoding="utf-8")
+    return path
+
+
+AGAIN = "--agent auditor --class-check, dispatch the auditor in class-check mode on its line 1"
+
+
+def test_a_verdict_with_no_class_check_is_refused(tmp_path: Path) -> None:
+    root = _merged(_run(tmp_path / "repo"), "U1", "U2")
+    refused = train_runner.record_verdict(
+        root, "rejected", findings=_findings(root, 1, "F1 | high | code")
+    )
+    assert refused.code == 1 and len(refused.lines) == 1
+    line = refused.lines[0]
+    assert line.startswith(
+        f"run {TRAIN} records no class check, so no audit verdict can be recorded."
+    )
+    assert line.count("Next:") == 1
+    assert f"Next: run the class check: daedalus_train.py model --repo {root} {AGAIN}" in line
+    assert train_state.VERDICT not in train_state.load(root, TRAIN)
+
+
+def test_a_fix_unit_merged_after_the_check_needs_the_check_again(tmp_path: Path) -> None:
+    root = _merged(_run(tmp_path / "repo"), "U1", "U2")
+    _check_file(root, "U1 | Plumbing | class ok", "U2 | Plumbing | class ok")
+    _ok(train_runner.auditor_model(root))
+    _rejected(root, 1, "F1")
+    reqs = _reqs(root, "Make `tests/test_u1.py::test_f1` pass.")
+    fix = FixUnit("fix1-u1", "repair", ("tests/test_u1.py",), ("U1",), ("F1",), (), reqs)
+    _ok(train_runner.fix_unit(root, fix))
+    _merged(root, "fix1-u1")
+    again = f"Next: run the class check again: daedalus_train.py model --repo {root} {AGAIN}"
+    # The model command reads the old file and names the merged unit it lacks.
+    code, lines = _model(root)
+    assert code == 1 and len(lines) == 1, lines
+    assert "names no line for merged unit fix1-u1." in lines[0] and again in lines[0]
+    assert lines[0].count("Next:") == 1
+    # The verdict reads the recorded check, which names two of the three merged units.
+    path = _findings(root, 2, "F2 | high | code")
+    refused = train_runner.record_verdict(root, "rejected", findings=path)
+    assert refused.code == 1 and len(refused.lines) == 1
+    assert refused.lines[0].startswith(
+        "the recorded class check names no line for merged unit fix1-u1, so no audit verdict"
+    )
+    assert again in refused.lines[0] and refused.lines[0].count("Next:") == 1
+    # A new check naming all three units lets the verdict go on to the auditor's own reply.
+    _check_file(
+        root,
+        "U1 | Plumbing | class ok",
+        "U2 | Plumbing | class ok",
+        "fix1-u1 | Plumbing | class ok",
+    )
+    code, lines = _model(root)
+    assert code == 0 and lines[-1] == "class check: 3 unit(s), 0 raised, round 2", lines
+    passed = train_runner.record_verdict(root, "rejected", findings=path)
+    assert passed.code == 1 and "class check" not in passed.lines[0], passed.lines
+
+
+def test_the_auditor_on_a_unit_answers_its_class_with_no_unit_merged(tmp_path: Path) -> None:
+    # 0280: a compliance question mid-build takes the asking unit's class, merged or not.
+    root = _run(tmp_path / "repo", CLASSED)
+    assert _model(root, "--unit", "U2") == (0, ["opus", AUTHN_LINE])
+    assert _model(root, "--unit", "u1") == (0, ["sonnet", PLUMBING_LINE])
+    code, lines = _model(root)
+    assert code == 1 and lines[0].startswith(f"no unit of run {TRAIN} is merged")
+    state = train_state.load(root, TRAIN)
+    assert train_state.AUDITOR_MODEL not in state and train_state.CLASS_CHECK not in state
 
 
 def test_the_summary_names_the_auditor_model_and_each_raised_unit(tmp_path: Path) -> None:

@@ -1513,8 +1513,8 @@ def _unit_record(state: dict[str, object], train_id: str, unit_id: str) -> dict[
     )
 
 
-# 0267: the agents whose model the unit's class picks.
-UNIT_AGENTS = ("coder", "verifier")
+# 0267, 0280: the agents whose model the unit's class picks; the auditor's for a unit's question.
+UNIT_AGENTS = ("coder", "verifier", "auditor")
 # 0161, 0133: the refutation count that takes a unit to the operator.
 OPERATOR_REFUTATION = 3
 _MODEL_SETTINGS_NEXT = (
@@ -1725,6 +1725,7 @@ def _check_rows(
     where: Path,
     merged: list[tuple[plan_record.Unit, dict[str, object], str]],
     operator: operator_file.Operator,
+    repo: Path,
 ) -> dict[str, dict[str, object]]:
     # 0280: one `<unit> | <planned class> | class ok` or `... | <class> | <place>` per merged unit.
     planned = {p.id.casefold(): (p.id, name) for p, _, name in merged}
@@ -1778,8 +1779,43 @@ def _check_rows(
         rows[uid] = entry
     missing = [uid for uid, _ in planned.values() if uid not in rows]
     if missing:
-        raise RunnerError(f"{where} names no line for unit {missing[0]}. {rerun}")
+        # 0280: a unit merged after the check, a fix unit say, needs a new class check.
+        again = _check_again(repo, "model")
+        raise RunnerError(f"{where} names no line for merged unit {missing[0]}. {again}")
     return rows
+
+
+def _check_again(repo: Path, then: str, again: bool = True) -> str:
+    # 0280: the one Next line that sends the run back through the class check.
+    return (
+        f"Next: run the class check{' again' if again else ''}: daedalus_train.py model --repo "
+        f"{repo} --agent auditor --class-check, dispatch the auditor in class-check mode on its "
+        f"line 1, then rerun {then}."
+    )
+
+
+def _class_check_owed(repo: Path, train_id: str, state: dict[str, object]) -> None:
+    # 0280: no audit verdict records before a class check that names every merged unit; a run
+    # with no recorded plan has no unit and so no class to check.
+    if not train_state.record(state, train_state.PLAN):
+        return
+    check = train_state.record(state, train_state.CLASS_CHECK)
+    if not check:
+        raise RunnerError(
+            f"run {train_id} records no class check, so no audit verdict can be recorded. "
+            f"{_check_again(repo, 'model --agent auditor, then verdict', again=False)}"
+        )
+    try:
+        merged = _merged_units(repo, train_id, state)
+    except workspace.WorkspaceError as exc:
+        raise RunnerError(str(exc)) from exc
+    named = {uid.casefold() for uid in _obj(check, "units")}
+    missing = [planned.id for planned, _ in merged if planned.id.casefold() not in named]
+    if missing:
+        raise RunnerError(
+            f"the recorded class check names no line for merged unit {missing[0]}, so no audit "
+            f"verdict can be recorded. {_check_again(repo, 'model --agent auditor, then verdict')}"
+        )
 
 
 def _class_check(
@@ -1804,7 +1840,7 @@ def _class_check(
         text = data.decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise RunnerError(f"cannot read {path} ({exc}). Next: make it a UTF-8 file.") from exc
-    rows = _check_rows(text, path, merged, operator)
+    rows = _check_rows(text, path, merged, operator, repo)
     sha = _sha256(data)
     # 0280: a reread of the same file keeps its round; a new check binds the next round.
     same = _text(prior, "sha256") == sha
@@ -3329,6 +3365,7 @@ def record_verdict(
                 f"--findings {want}."
             )
         listed = _round_findings(repo, train_id, status, round_, findings) if findings else None
+        _class_check_owed(repo, train_id, state)
         _class_rows_listed(repo, train_id, state, round_, listed)
         found, named = _auditor_seq(repo, train_id, status, seq)
         current = _integration_tip(repo, train_id)

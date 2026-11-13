@@ -456,9 +456,9 @@ def _model(
             return Outcome(
                 EXIT_STOP,
                 [
-                    "model --unit picks a coder's or a verifier's model from the unit's class "
-                    "and takes no --override. Next: rerun it as model --agent coder --unit "
-                    "<unit id> or model --agent verifier --unit <unit id>."
+                    "model --unit picks a coder's, a verifier's or an auditor's model from the "
+                    "unit's class and takes no --override. Next: rerun it as model --agent "
+                    "<coder, verifier or auditor> --unit <unit id>."
                 ],
             )
         return unit_model(repo, agent, unit)

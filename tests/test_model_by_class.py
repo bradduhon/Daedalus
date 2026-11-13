@@ -159,9 +159,18 @@ def test_an_unknown_unit_and_a_run_with_no_plan_are_refused(repo: Path) -> None:
     assert "Next: record the plan" in lines[0]
 
 
-def test_model_unit_takes_only_the_coder_and_the_verifier(repo: Path) -> None:  # noqa: F811
+def test_model_unit_takes_only_the_coder_the_verifier_and_the_auditor(
+    repo: Path,  # noqa: F811
+) -> None:
     _model_train(repo, block=CLASSED)
-    for agent in ("planner", "auditor"):
+    for agent in ("planner", "orchestrator"):
         code, lines = _model(repo, agent, "U1")
-        assert code == 1 and "model --unit picks a coder's or a verifier's model" in lines[0]
+        assert (
+            code == 1 and "model --unit picks a coder's, a verifier's or an auditor's" in lines[0]
+        )
         assert "Next:" in lines[0]
+    # 0280: the auditor's compliance question takes the asking unit's class, merged or not.
+    assert _model(repo, "auditor", "U2") == (
+        0,
+        ["opus", U2_LINE.format(agent="auditor", model="opus")],
+    )
