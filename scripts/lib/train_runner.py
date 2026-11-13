@@ -32,6 +32,8 @@ from lib import (
     work_classes,
     workspace,
 )
+from lib.agent_models import AgentModelError
+from lib.agent_models import resolve as resolve_model
 from lib.audit import DataDirError, ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
@@ -1132,7 +1134,44 @@ def _checked_in(
     return Outcome(EXIT_OK, session.lines)
 
 
-def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
+def orchestrating_record(repo: Path, by: str) -> dict[str, object]:
+    # 0276: the agent runs on the word the model command gives it; a script cannot read a session's.
+    unknown = {"by": by, "model": train_state.UNKNOWN_MODEL}
+    if by != train_state.BY_AGENT:
+        return {**unknown, "reason": train_state.NO_SESSION_RECORD}
+    try:
+        model = resolve_model(ORCHESTRATOR_AGENT, load_config(cwd=str(repo)), repo=repo)
+    except (AgentModelError, ConfigError, DataDirError):
+        model = None
+    if model not in work_classes.MODEL_RANK:
+        return {**unknown, "reason": train_state.AGENT_UNRESOLVED}
+    return {"by": by, "model": model, "reason": None}
+
+
+def record_orchestrating(repo: Path, by: str) -> None:
+    # 0276: run start only; begin and start are main-session commands no agent's table admits.
+    train_id = train_state.active_train(repo)
+    if train_id is None:
+        return
+    held = orchestrating_record(repo, by)
+    train_state.update(repo, train_id, **{train_state.ORCHESTRATING: held})
+
+
+def orchestrating_read(cwd: Path) -> Outcome:
+    # 0276: the one line a judgement call reads; it ends in decides or asks.
+    def read(repo: Path, train_id: str) -> list[str]:
+        return [train_state.orchestrating_line(train_state.load(repo, train_id))]
+
+    return _recorded(cwd, read)
+
+
+def start(
+    cwd: Path,
+    train: str,
+    output: str | None,
+    plugin_root: Path = PLUGIN_ROOT,
+    orchestrator: str = train_state.BY_SESSION,
+) -> Outcome:
     if not _SLUG.fullmatch(train):
         return Outcome(
             EXIT_STOP,
@@ -1181,7 +1220,8 @@ def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_
     except workspace.WorkspaceError as exc:
         return Outcome(EXIT_STOP, [str(exc)])
     # 0072, 0245: config.json limits.parallel_coders caps the coders a stage runs at once.
-    return _record_start(repo, defn, kind, features, output, config.max_concurrent_builders, lines)
+    builders = config.max_concurrent_builders
+    return _record_start(repo, defn, kind, features, output, builders, lines, orchestrator)
 
 
 def _record_start(
@@ -1192,6 +1232,7 @@ def _record_start(
     output: str | None,
     builders: int,
     lines: list[str],
+    orchestrator: str = train_state.BY_SESSION,
 ) -> Outcome:
     train_id = train_state.active_train(repo)
     if train_id is None:
@@ -1226,6 +1267,7 @@ def _record_start(
         consults_open=[],
         consumed_records=[],
         halted=None,
+        **{train_state.ORCHESTRATING: orchestrating_record(repo, orchestrator)},
     )
     shown = f", outputs in {out_dir}" if out_dir else ""
     return Outcome(
@@ -1593,6 +1635,8 @@ CLASS_CHECK_FILE = "class-check.txt"
 CLASS_OK = "class ok"
 # 0280: the finding class and severity of a unit the class check raised.
 CLASS_FINDING, CLASS_SEVERITY = "work-class", "high"
+# 349: a place's named part is a finding and state key, so it stays one short line.
+NAMED_PART_MAX = 80
 _SEP = " | "
 
 
@@ -1778,6 +1822,12 @@ def _check_rows(
                     f"{where} line {number} names its own planned class or a place that is not "
                     f"`<file>:<named part>`. {rerun}"
                 )
+            if len(part.strip()) > NAMED_PART_MAX:
+                raise RunnerError(
+                    f"{where} line {number} gives unit {uid} a named part of "
+                    f"{len(part.strip())} characters, over {NAMED_PART_MAX}; name a section, "
+                    f"a line range or the like, never a sentence. {rerun}"
+                )
             rank = work_classes.MODEL_RANK.index
             up = rank(work_classes.model_for(checked, operator)) > rank(
                 work_classes.model_for(name, operator)
@@ -1855,6 +1905,8 @@ def _class_check(
     # 0280: a reread of the same file keeps its round; a new check binds the next round.
     same = _text(prior, "sha256") == sha
     round_ = _int(prior, "round", 0) if same else derived_round(state)
+    # 349: every key a unit was raised under, so an exemption of an earlier key still answers.
+    keys = {uid: [k for k in v if isinstance(k, str)] for uid, v in _raised_keys(prior).items()}
     lines: list[str] = []
     raised: list[str] = []
     for uid, entry in rows.items():
@@ -1868,9 +1920,52 @@ def _class_check(
         lines.append(f"class check {uid}: {name} -> {checked} ({model}) at {place}{mark}")
         if entry["raised"]:
             key = raised_key(place)
+            held = keys.setdefault(uid, [])
+            held += [] if key in held else [key]
+            by = _answered(uid, checked, held, state, merged, operator)
+            if by is not None:
+                entry["answered"] = by
+                raised.append(f"class check {uid}: answered by {by}")
+                continue
             raised.append(f"Class raised: {key}{_SEP}{CLASS_SEVERITY}{_SEP}{CLASS_FINDING}")
-    tail = f"class check: {len(rows)} unit(s), {len(raised)} raised, round {round_}"
-    return {"round": round_, "sha256": sha, "units": rows}, [*lines, *raised, tail]
+    open_ = len([row for row in raised if row.startswith("Class raised: ")])
+    tail = f"class check: {len(rows)} unit(s), {open_} raised, round {round_}"
+    check: dict[str, object] = {"round": round_, "sha256": sha, "units": rows}
+    if keys:
+        check[RAISED_KEYS] = keys
+    return check, [*lines, *raised, tail]
+
+
+RAISED_KEYS = "raised_keys"
+EXEMPTION = "exemption"
+
+
+def _raised_keys(check: dict[str, object]) -> dict[str, list[object]]:
+    held = _obj(check, RAISED_KEYS)
+    return {uid: v for uid, v in held.items() if isinstance(v, list)}
+
+
+def _answered(
+    uid: str,
+    raised_class: str,
+    keys: list[str],
+    state: dict[str, object],
+    merged: list[tuple[plan_record.Unit, dict[str, object], str]],
+    operator: operator_file.Operator,
+) -> str | None:
+    # 349: a raise is answered by a merged fix unit of that class or higher, or an exemption.
+    rank = work_classes.MODEL_RANK.index
+    need = rank(work_classes.model_for(raised_class, operator))
+    fix_units = train_state.record(state, train_state.FIX_UNITS)
+    for planned, _, name in merged:
+        fixed = _obj(fix_units, planned.id).get("fixes")
+        if isinstance(fixed, list) and uid in fixed:
+            if rank(work_classes.model_for(name, operator)) >= need:
+                return planned.id
+    exempted = train_state.record(state, train_state.EXEMPTIONS)
+    if any(key in _obj(exempted, r) for r in exempted for key in keys):
+        return EXEMPTION
+    return None
 
 
 REFUTATIONS = "refutations"
@@ -3009,6 +3104,47 @@ def _fix_text(
     return new_text, new
 
 
+def _fix_settings(repo: Path) -> operator_file.Operator:
+    try:
+        return operator_file.load(repo)
+    except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
+        raise RunnerError(f"{exc}\n{FIX_NEXT}") from exc
+
+
+def _fix_class(repo: Path, old: plan_record.Plan, fix: FixUnit) -> tuple[FixUnit, str]:
+    # 349: no --class takes the fixed unit's class, the highest by MODEL_RANK, a tie in order.
+    by_id = {u.id: u for u in old.units}
+    fixed = [by_id[f] for f in fix.fixes]
+    if fix.work_class is None and all(u.work_class is None for u in fixed):
+        return fix, f"from {fixed[0].id}"
+    operator = _fix_settings(repo)
+    top = fixed[work_classes.highest([u.effective_class for u in fixed], operator)]
+    if fix.work_class is not None:
+        rank = work_classes.MODEL_RANK.index
+        given = work_classes.model_for(fix.work_class, operator)
+        held = work_classes.model_for(top.effective_class, operator)
+        if rank(given) < rank(held) and fix.class_reason is None:
+            raise RunnerError(
+                f"--class {fix.work_class} runs on {given}, smaller than {held}, which unit "
+                f"{top.id} of class {top.effective_class} runs on. Next: rerun fix-unit with "
+                "--class-reason saying why the fix needs the smaller model, or with no --class."
+            )
+        return fix, "given"
+    place = fix.place if fix.place is not None else top.place
+    split = plan_record.split_place(place) if place is not None else None
+    if fix.place is None and split is not None:
+        if not any(plan_record._covers(entry, split[0]) for entry in fix.files):
+            raise RunnerError(
+                f"unit {top.id} has the class {top.effective_class} at {place}, and fix unit "
+                f"{fix.uid} does not name {split[0]} in --files. Next: rerun fix-unit with "
+                "--class and --place naming a file from --files and the named part of it."
+            )
+    reason = fix.class_reason if fix.class_reason is not None else top.class_reason
+    return replace(fix, work_class=top.work_class, place=place, class_reason=reason), (
+        f"from {top.id}"
+    )
+
+
 def _restore(target: Path, text: str, cause: str) -> None:
     # 0271: a failed record puts the plan file back as it was recorded.
     try:
@@ -3062,14 +3198,10 @@ def _fix_lines(repo: Path, train_id: str, fix: FixUnit) -> list[str]:
                 "the run and start one whose plan declares the contract."
             )
     cap = _int(state, "max_concurrent_builders", DEFAULT_MAX_CONCURRENT_BUILDERS)
+    fix, source = _fix_class(repo, old, fix)
     new_text, new = _fix_text(old, text, fix, lines, cap)
-    operator = None
-    if plan_record.has_class_fields(new):
-        # 0280: the plan step's class checks, read from the same settings it reads.
-        try:
-            operator = operator_file.load(repo)
-        except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
-            raise RunnerError(f"{exc}\n{FIX_NEXT}") from exc
+    # 0280: the plan step's class checks, read from the same settings it reads.
+    operator = _fix_settings(repo) if plan_record.has_class_fields(new) else None
     defects = plan_record.validate(new, cap, operator)
     if defects:
         raise RunnerError("\n".join([*defects, "Next: correct the fix unit's inputs, then rerun."]))
@@ -3096,7 +3228,8 @@ def _fix_lines(repo: Path, train_id: str, fix: FixUnit) -> list[str]:
     except (RunnerError, train_state.TrainStateError) as exc:
         _restore(target, text, str(exc))
         raise
-    return [f"fix-unit {fix.uid}: fixes {', '.join(fix.fixes)} plan sha256={sha}"]
+    named = f"class={fix.work_class or work_classes.PLUMBING} ({source})"
+    return [f"fix-unit {fix.uid}: fixes {', '.join(fix.fixes)} {named} plan sha256={sha}"]
 
 
 def fix_unit(cwd: Path, fix: FixUnit) -> Outcome:
@@ -3619,6 +3752,9 @@ def _class_rows_listed(
         return
     for uid, entry in _raised(check).items():
         key = raised_key(_text(entry, "place"))
+        # 349: a raise answered by a fix unit or an exemption owes no row.
+        if _text(entry, "answered"):
+            continue
         if listed is None or key not in listed:
             raise RunnerError(
                 f"the class check raised unit {uid}, and round {round_} lists no row `{key}"
@@ -4004,6 +4140,7 @@ def state_lines(cwd: Path, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
             f"stage: {at} ({min(index + 1, len(stages))} of {len(stages)})",
             f"waiting on: {', '.join(_text(d, 'brief') for d in open_) or 'nothing'}",
             f"halted: {_text(session.state, 'halted') or 'no'}",
+            train_state.orchestrating_line(session.state),
             # 0271: one line per fix unit, naming what it fixes and answers.
             *(f"fix unit: {line}" for _, line in train_state.fix_lines(session.state)),
             # 0284: one line per hand-off, none when the run had none.

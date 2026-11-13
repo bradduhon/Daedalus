@@ -80,7 +80,8 @@ coding model: for each `Unit:` line, read what that unit changed with
 investigation alike, against the definition on every `Work class:` line. Write one line per
 unit to the `Class check file:` path, `<unit> | <planned class> | class ok` or
 `<unit> | <planned class> | <class the change calls for> | <file>:<named part that shows it>`,
-naming only a class a `Work class:` line names. End that reply with
+naming only a class a `Work class:` line names; the named part is a function, a section or a
+line range, never a sentence. End that reply with
 `[STATUS: CLASS_CHECK] path=<that path>` as its first and last line, with no verdict line, no
 section and no findings file. A later round's dispatch carries one `Class raised: <row>` line
 per unit the check raised: put each row in that round's findings list and file it as a

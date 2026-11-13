@@ -200,7 +200,13 @@ def test_git_dash_c_commit_into_a_sibling_refused(repo_cwd: Path, units: dict[st
 
 
 def test_write_to_an_undispatched_unit_refused(repo_cwd: Path, units: dict[str, Path]) -> None:
-    _refused(_write(repo_cwd, "a-1", units["u1"] / "src" / "a.py"), "never dispatched")
+    reason = _refused(_write(repo_cwd, "a-1", units["u1"] / "src" / "a.py"), "never dispatched")
+    # issue 306: the refusal names the cause and ends with one next step inside the repository.
+    assert f"session folder outside {repo_cwd}" in reason and reason.count("Next:") == 1
+    assert reason.endswith(
+        f"Next: start a new coder from a session inside {repo_cwd}, with "
+        "one Worktree: line naming the unit."
+    )
 
 
 def test_coder_write_without_a_train_refused(repo_cwd: Path, units: dict[str, Path]) -> None:
