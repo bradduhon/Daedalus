@@ -47,6 +47,7 @@ from lib.train_runner import (  # noqa: E402
     record_docs_verdict,
     record_exception,
     record_ledger,
+    record_pick,
     record_plan,
     record_unit_exception,
     record_verdict,
@@ -72,7 +73,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
         "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch, route, "
-        "finish-unit, fix-unit, providers, validate. "
+        "finish-unit, fix-unit, pick, providers, validate. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -224,6 +225,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     fixed.add_argument("--place")
     fixed.add_argument("--class-reason", dest="class_reason")
+    # 339: the operator's per-finding audit pick, recorded by the main session only.
+    picked = sub.add_parser("pick", allow_abbrev=False)
+    picked.add_argument("--repo", type=Path, required=True)
+    picked.add_argument("--round", dest="round_", type=int, required=True)
+    picked.add_argument("--finding", action="append", required=True)
+    picked.add_argument("--pick", dest="word", required=True)
     # 0256: the run fetches Terraform providers once, outside the kernel wrapper.
     fetch = sub.add_parser("providers", allow_abbrev=False)
     fetch.add_argument("--repo", type=Path, required=True)
@@ -628,6 +635,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return finish_unit(repo, args.unit, args.next_unit, args.note, args.warm)
     if args.action == "fix-unit":
         return fix_unit(repo, _fix(args))
+    if args.action == "pick":
+        return record_pick(repo, args.round_, args.finding, args.word)
     if args.action == "providers":
         return _providers(repo, args.allow)
     if args.action == "validate":

@@ -161,6 +161,21 @@ def test_run_skill_carries_the_build_train_preconditions_and_relay() -> None:
     assert "git push" not in run
 
 
+def test_the_decision_relay_records_each_audit_pick_before_the_resume() -> None:
+    # 339: fix-unit reads the main session's pick record, so it is written before DECIDED.
+    route = _run_skill().split("- `[STATUS: DECISION] brief=<path> questions=<n>`:", 1)[1]
+    route = route.split("\n", 1)[0]
+    pick = (
+        "For the audit phase's per-finding questions, record each pick before that resume with "
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py pick --repo <repo> --round <n> "
+        "--finding <finding key> --pick <fix, skip or stop>` (339), one call per pick word with "
+        "one `--finding` per finding that took it, and on exit 1 stop and show its output, whose "
+        "`Next:` line is the next action."
+    )
+    assert pick in route
+    assert route.index(pick) < route.index('SendMessage(orchestrator, "DECIDED.')
+
+
 def test_run_skill_reads_each_argument_shape() -> None:
     # 0173, spec 4.1: words, a plan or spec path, brainstorm, and a leading composition name.
     args = " ".join(_run_step(2).split())

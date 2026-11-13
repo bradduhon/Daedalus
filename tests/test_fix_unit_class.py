@@ -20,7 +20,7 @@ from tests.test_auditor_model import (
     _model,
     _run,
 )
-from tests.test_fix_units import _plan, _rejected, _reqs
+from tests.test_fix_units import _picked, _plan, _rejected, _reqs
 from tests.test_records_in_one_call import (
     TRAIN,
     _cli,
@@ -68,6 +68,7 @@ def _shot(root: Path) -> tuple[str, object, object]:
 def _sinks_run(tmp_path: Path) -> Path:
     root = _merged(_run(tmp_path / "repo", _classed(SINKS_FIELDS, None)), "U1", "U2")
     _rejected(root, 1, "F1", "F2")
+    _picked(root, 1, "F1", "F2")
     return root
 
 
@@ -182,6 +183,7 @@ def test_a_fix_of_several_units_takes_the_highest_class(
 ) -> None:
     root = _merged(_run(tmp_path / "repo", _classed(u1, u2)), "U1", "U2")
     _rejected(root, 1, "F1", "F2")
+    _picked(root, 1, "F1", "F2")
     line = _ok(_fix(root, fixes=fixes, files=files))[0]
     assert f"class={want} plan sha256=" in line, line
 
@@ -201,6 +203,7 @@ def test_a_second_fix_takes_the_first_fix_units_class_and_the_check_reads_class_
     code, lines = _model(root)
     assert code == 0 and "class check fix1-u1: Injection sinks | class ok" in lines, lines
     _rejected(root, 2, "F3")
+    _picked(root, 2, "F3")
     second = _ok(_fix(root, "fix2-u1", ("fix1-u1",), finding="F3"))[0]
     assert "fixes fix1-u1 class=Injection sinks (from fix1-u1) plan" in second, second
     line = _ok(train_runner.dispatch_unit(root, "fix2-u1"))[0]
@@ -245,6 +248,7 @@ def _raised_round_one(tmp_path: Path) -> Path:
     code, lines = _model(root)
     assert code == 0 and f"Class raised: {RAISED_ROW}" in lines, lines
     _rejected(root, 1, RAISED)
+    _picked(root, 1, RAISED)
     return root
 
 

@@ -90,14 +90,20 @@ def _rejected(root: Path, round_: int, *keys: str, train: str = TRAIN) -> None:
     train_state.update(root, train, verdict=verdict, audit_rounds=rounds)
 
 
+def _picked(root: Path, round_: int, *keys: str, word: str = "fix") -> list[str]:
+    # 339: the main session's record of the operator's pick, through the pick command itself.
+    return _ok(train_runner.record_pick(root, round_, list(keys), word))
+
+
 def _merged(root: Path) -> Path:
-    # 0230: both planned units built, verified and merged, then round 1 rejected.
+    # 0230: both planned units built, verified and merged, then round 1 rejected and picked.
     for uid in ("U1", "U2"):
         _ok(train_runner.dispatch_unit(root, uid))
         _verdict(root, _built(root, uid), VERIFIED_REPLY)
     _ok(train_runner.finish_unit(root, "U1"))
     _ok(train_runner.finish_unit(root, "U2"))
     _rejected(root, 1, "F1", "F2")
+    _picked(root, 1, "F1", "F2")
     return root
 
 
@@ -219,6 +225,7 @@ def test_two_fix_units_the_second_fixing_the_first(tmp_path: Path) -> None:
     _verdict(root, _built(root, "fix1-u1"), VERIFIED_REPLY)
     _ok(train_runner.finish_unit(root, "fix1-u1"))
     _rejected(root, 2, "F3")
+    _picked(root, 2, "F3")
     second = _fix(root, "fix2-u1", ("fix1-u1",), ("F3",), reqs=(REQ_F3,))
     want = rf"fix-unit fix2-u1: fixes fix1-u1 class=Plumbing \(from fix1-u1\) plan sha256={HEX64}"
     assert re.fullmatch(want, _ok(second)[0])
@@ -248,11 +255,15 @@ def test_finish_unit_merges_one_fix_unit_while_another_waits(tmp_path: Path) -> 
     assert waiting.is_dir() and "Merge fix1-u1 for" in log and "Merge fix1-u2" not in log
 
 
-def test_the_main_session_alone_runs_fix_unit(marked_repo: Path) -> None:
-    # 0271: the orchestrator's train class does not name fix-unit, so only the main session runs it.
-    command = f"python3 {SCRIPTS_DIR / 'daedalus_train.py'} fix-unit --repo {marked_repo}"
-    assert jail.admitted(command, "main", str(marked_repo))
-    assert not decide(_b("orchestrator", command.replace(str(marked_repo), CWD)), CFG).allow
+def test_the_orchestrator_runs_fix_unit_and_only_the_main_session_runs_pick(
+    marked_repo: Path,
+) -> None:
+    # 339: fix-unit is on the orchestrator's train class; pick, the record it reads, is not.
+    for verb, orchestrator in (("fix-unit", True), ("pick", False)):
+        command = f"python3 {SCRIPTS_DIR / 'daedalus_train.py'} {verb} --repo {marked_repo}"
+        assert jail.admitted(command, "main", str(marked_repo))
+        payload = _b("orchestrator", command.replace(str(marked_repo), CWD))
+        assert decide(payload, CFG).allow is orchestrator, verb
 
 
 def test_a_fix_unit_can_answer_a_refuted_verifier_row(tmp_path: Path) -> None:
@@ -350,6 +361,7 @@ def test_the_state_print_marks_a_fix_unit(tmp_path: Path) -> None:
     plan.write_text(_plan(_fixture(tmp_path / "repo")).read_text(), encoding="utf-8")
     _ok(train_runner.record_plan(repo, plan))
     _rejected(repo, 1, "F1", train=train)
+    _picked(repo, 1, "F1")
     before = train_runner.state_lines(repo, plugin).lines
     _ok(_fix(repo))
     after = _ok(train_runner.state_lines(repo, plugin))

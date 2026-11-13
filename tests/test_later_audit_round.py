@@ -13,7 +13,7 @@ from tests.conftest import CFG, CWD, REPO_ROOT, git
 from tests.hook_chain import decide
 from tests.payloads import _b
 from tests.test_auditor_model import PLUMBING_LINE, REASON, _check_file, _merged, _model, _run
-from tests.test_fix_units import _reqs
+from tests.test_fix_units import _picked, _reqs
 from tests.test_records_in_one_call import SESSION, TRAIN, _hook, _ok
 from tests.test_records_in_one_call import fixed as fixed  # noqa: F401
 
@@ -149,6 +149,7 @@ def test_round_two_reads_two_fix_units_and_a_new_auditor_passes_its_checks(
     tmp_path: Path,
 ) -> None:
     root, judged = _round_one_rejected(tmp_path)
+    _picked(root, 1, NODE_ONE, NO_TEST_ONE)
     _fix(root, "fix1-u1", ("tests/test_u1.py",), "U1", NODE_ONE, "AuthN")
     _fix(root, "fix1-u2", ("web/u2.html",), "U2", NO_TEST_ONE, "Plumbing")
     _check_file(root, *ALL_CLASS_OK, "fix1-u1 | AuthN | class ok", "fix1-u2 | Plumbing | class ok")

@@ -2996,11 +2996,66 @@ def _fix_shape(fix: FixUnit, train_id: str) -> None:
             raise RunnerError(f"{label} names one value twice. {FIX_NEXT}")
 
 
+# 339: the per-finding audit picks, each stored word beside the operator's phrase.
+PICK_WORDS: dict[str, str] = {
+    "fix": "Fix it now",
+    "skip": "Skip, track or exempt it",
+    "stop": "Stop the run",
+}
+PICK_FIX = "fix"
+
+
+def record_pick(cwd: Path, round_: int, findings: list[str], word: str) -> Outcome:
+    # 339: the main session records the operator's pick per finding; fix-unit reads it.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        phrase = PICK_WORDS.get(word)
+        if phrase is None:
+            raise RunnerError(
+                f"--pick {word!r} is not fix, skip or stop. Next: rerun pick with --pick fix "
+                "for `Fix it now`, skip for `Skip, track or exempt it` or stop for `Stop the run`."
+            )
+        named = list(dict.fromkeys(findings))
+        if not named:
+            raise RunnerError(
+                "pick names no finding. Next: rerun pick with one --finding per finding the "
+                "operator gave this pick."
+            )
+
+        def change(state: dict[str, object]) -> None:
+            verdict = train_state.record(state, train_state.VERDICT)
+            rejected = verdict.get("status") == train_state.REJECTED
+            if not rejected or round_ < 1 or _int(verdict, "round", 0) != round_:
+                raise RunnerError(
+                    f"run {train_id} records no rejected audit verdict for round {round_}, so "
+                    "no finding of it waits for a pick. Next: rerun pick with the round of the "
+                    "newest rejected verdict, after daedalus_train.py verdict records it."
+                )
+            try:
+                keys = round_keys(repo, train_id, state, round_)
+            except ProofError as exc:
+                raise RunnerError(str(exc)) from exc
+            missing = [key for key in named if key not in keys]
+            if missing:
+                raise RunnerError(
+                    f"finding {missing[0]!r} is not in the rejected round {round_}. Next: rerun "
+                    "pick with finding keys from the round's findings file."
+                )
+            picks = train_state.record(state, train_state.PICKS)
+            held = train_state.record(picks, str(round_))
+            picks[str(round_)] = {**held, **dict.fromkeys(named, word)}
+            state[train_state.PICKS] = picks
+
+        train_state.change(repo, train_id, change)
+        return [f"pick round={round_} {key}: {phrase}" for key in named]
+
+    return _recorded(cwd, edit)
+
+
 def _fix_answers(
     repo: Path, train_id: str, state: dict[str, object], fix: FixUnit
 ) -> dict[str, object]:
-    # 0271: each claimed finding is a key of the recorded rejected round, each row a row of the
-    # fixed unit's newest refuted verifier verdict; the tree records nothing finer.
+    # 0271, 339: each claimed finding is a picked key of the recorded rejected round, each row a
+    # row of the fixed unit's newest refuted verifier verdict, which the verify phase routes.
     entry: dict[str, object] = {"fixes": list(fix.fixes)}
     if fix.findings:
         verdict = train_state.record(state, train_state.VERDICT)
@@ -3020,6 +3075,15 @@ def _fix_answers(
             raise RunnerError(
                 f"finding {missing[0]!r} is not in the rejected round {round_}. Next: rerun "
                 "fix-unit with finding keys from the round's findings file."
+            )
+        # 339: every caller, the orchestrator too, needs the operator's recorded Fix it now pick.
+        picked = train_state.record(train_state.record(state, train_state.PICKS), str(round_))
+        unpicked = [key for key in fix.findings if picked.get(key) != PICK_FIX]
+        if unpicked:
+            raise RunnerError(
+                f"finding {unpicked[0]!r} of round {round_} has no recorded `Fix it now` pick. "
+                "Next: hand the finding back to the main session, which records the operator's "
+                "pick with daedalus_train.py pick; never add a fix unit without it."
             )
         entry.update({"findings": list(fix.findings), "round": round_})
     if fix.rows:
