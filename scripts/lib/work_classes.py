@@ -70,6 +70,25 @@ DEFAULT_CLASSES: tuple[tuple[str, str], ...] = (
         "configuration, and any exception to or skip of a rule.",
     ),
     (
+        "Injection sinks",
+        _BUILDS + "where data from outside reaches a query, a shell command, a file path, a "
+        "template or a deserializer.",
+    ),
+    (
+        "Isolation and confinement",
+        _BUILDS + "what keeps one process, tenant or agent from reaching another's files, "
+        "memory or network, such as sandboxes, jails, containers and process limits.",
+    ),
+    (
+        "Supply chain",
+        _BUILDS + "which outside code and tools a project takes in and how it ships, such as "
+        "dependency versions and sources, the build and release pipeline and artifact signing.",
+    ),
+    (
+        "Redaction",
+        _BUILDS + "what keeps secrets and sensitive values out of logs, errors and output.",
+    ),
+    (
         PLUMBING,
         _BUILDS + "none of the things another class names, including work that only uses one "
         "of them.",
