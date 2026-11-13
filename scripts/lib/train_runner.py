@@ -3157,7 +3157,8 @@ def _fix_text(
         len(new.units) != len(old.units) + 1
         or set(new.units) != {*old.units, want}
         or set(new.edges) != {*old.edges, *made}
-        or (new.pins, new.version) != (old.pins, old.version)
+        or (new.pins, new.version, new.provides, new.provides_none)
+        != (old.pins, old.version, old.provides, old.provides_none)
         or read != [*kept, (fix.uid, tuple(lines))]
     ):
         raise RunnerError(
