@@ -75,7 +75,8 @@ def test_verify_skill_dispatches_one_verifier_per_unit() -> None:
         "A unit with a `Rows:` line goes to the verifier rows mode started for it, by the"
         " orchestrator's message.",
         "Before each fresh dispatch, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py"
-        " model --repo <repo> --agent verifier`",
+        " model --repo <repo> --agent verifier --unit <unit id>`",
+        "The unit's class picks the verifier's model, the same model its coder gets (0267).",
         "One verifier per unit (0231, amends 0086): a later unit never goes to an earlier unit's"
         " verifier.",
         "The verifiers run in parallel, up to `limits.parallel_coders` coders plus verifiers at"

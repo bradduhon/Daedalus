@@ -307,8 +307,8 @@ def _unit_prompt(ts: str, unit: str) -> dict[str, object]:
     return _prompt(ts, f"Unit worktree: /r/.claude/worktrees/{TRAIN}-{unit}")
 
 
-def _escalated_train(home: Path) -> None:
-    # 0187: a1 is refuted twice on sonnet, then a fresh opus coder takes it; a2 passes on sonnet.
+def _two_model_train(home: Path) -> None:
+    # 0187: a1 is refuted twice on sonnet, then a second coder on opus takes it; a2 passes.
     _agent(
         home,
         "orch",
@@ -344,9 +344,9 @@ def _escalated_train(home: Path) -> None:
     _agent(home, "ver", "daedalus:verifier", checks, parentAgentId="orch")
 
 
-def test_model_column_and_refuted_line_for_an_escalated_unit(home: Path) -> None:
+def test_model_column_and_refuted_line_for_a_unit_two_models_coded(home: Path) -> None:
     # 0187: the model cell comes from each transcript; the refuted line counts per coder model.
-    _escalated_train(home)
+    _two_model_train(home)
     runs, _ = te.session_runs(SESSION, home.parents[2] / "repo", [])
     (run,) = runs
     coders = {(r.agent_id, r.label): r.model for r in run.rows if r.agent == te.CODER}

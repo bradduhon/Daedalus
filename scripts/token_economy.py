@@ -25,8 +25,7 @@ from lib.audit import (  # noqa: E402
     read_log,
     root_info,
 )
-from lib.audit_proof import HANDBACK  # noqa: E402
-from lib.coder_model import REFUTED_PREFIX  # noqa: E402
+from lib.audit_proof import HANDBACK, REFUTED_PREFIX  # noqa: E402
 from lib.config import ConfigError, load_config  # noqa: E402
 from lib.train_state import (  # noqa: E402
     AUDIT_BOUNDS,
