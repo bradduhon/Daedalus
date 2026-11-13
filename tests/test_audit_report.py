@@ -144,7 +144,7 @@ def test_report_renders_every_section(marked_data: Path, hook_input: Any) -> Non
     assert "- seq 14 coder: \\[STATUS: COMPLETE\\]\n" in out
     assert "- seq 27 verifier: \\[STATUS: YIELD\\_WEB\\] x\n" in out
     assert "- seq 29 auditor: \\[VERDICT: APPROVED\\]\n" in out
-    assert "| a1 | coder | 2 | 14 | Built it \\| twice. \\[STATUS: COMPLETE\\] |" in out
+    assert "| coder | 2 | 14 | Built it \\| twice. \\[STATUS: COMPLETE\\] | a1 |" in out
     assert "| coder | Bash | 2 | 0 | 1 |" in out
     assert "| coder | Write | 2 | 0 | 0 |" in out
     assert "| PreToolUse | 12 |" in out
@@ -161,7 +161,7 @@ def test_report_head_matches_verifier(marked_data: Path, hook_input: Any) -> Non
 def test_open_subagent_shows_open(marked_data: Path, hook_input: Any) -> None:
     _subagent(hook_input, "SubagentStart", "a9", "coder")
     out = _report("--repo", hook_input()["cwd"]).stdout
-    assert "| a9 | coder | 1 | open |  |" in out
+    assert "| coder | 1 | open |  | a9 |" in out
 
 
 def test_tampered_record_exits_one(marked_data: Path, hook_input: Any) -> None:
@@ -252,8 +252,8 @@ def test_agent_text_renders_inert(marked_data: Path, hook_input: Any) -> None:
     assert result.returncode == 0, result.stderr
     out = result.stdout
     assert "<" not in out and "![" not in out and "~~" not in out
-    row = next(line for line in out.splitlines() if line.startswith("| a1 |"))
-    assert _row_columns(row) == 5
+    row = next(line for line in out.splitlines() if line.startswith("| coder |"))
+    assert _row_columns(row) == 5 and row.endswith("| a1 |")
     status = [line for line in out.splitlines() if line.startswith("- seq 2 coder: ")]
     assert status == [f"- seq 2 coder: {md_escape(INJECTION + ' [STATUS: BLOCKED]')}"]
     assert "\\!\\[t\\]\\(http://evil/x.png\\)" in status[0]
@@ -308,7 +308,7 @@ def test_no_subagent_stop_renders_open(marked_data: Path, hook_input: Any) -> No
         )
     result = _report("--repo", hook_input()["cwd"])
     assert result.returncode == 0, result.stderr
-    assert "| a1 | coder | 1 | open |  |" in result.stdout
+    assert "| coder | 1 | open |  | a1 |" in result.stdout
     assert "| coder | Edit | 1 | 0 | 0 |" in result.stdout
 
 
@@ -335,16 +335,29 @@ def test_two_resumes_of_one_agent_show_as_two_rows(marked_data: Path, hook_input
     _subagent(hook_input, "SubagentStop", "a1", "coder", last_assistant_message="third")
     _subagent(hook_input, "SubagentStart", "a1", "coder")
     out = _report("--repo", hook_input()["cwd"]).stdout
-    assert "| a1 | coder | 1 | 2 | first |" in out
-    assert "| a1 | coder | resume | 3 | second |" in out
-    assert "| a1 | coder | resume | 4 | third |" in out
-    assert "| a1 | coder | 5 | open |  |" in out
+    assert "| coder | 1 | 2 | first | a1 |" in out
+    assert "| coder | resume | 3 | second | a1 |" in out
+    assert "| coder | resume | 4 | third | a1 |" in out
+    assert "| coder | 5 | open |  | a1 |" in out
 
 
 def test_stop_with_no_earlier_record_keeps_a_dash_start(marked_data: Path, hook_input: Any) -> None:
     _subagent(hook_input, "SubagentStop", "a7", "verifier", last_assistant_message="done")
     out = _report("--repo", hook_input()["cwd"]).stdout
-    assert "| a7 | verifier | - | 1 | done |" in out
+    assert "| verifier | - | 1 | done | a7 |" in out
+
+
+def test_two_agents_of_one_role_are_numbered_by_first_start(
+    marked_data: Path, hook_input: Any
+) -> None:
+    # D5: the id trails only in the timeline; the blocks list and tables use the role label.
+    _subagent(hook_input, "SubagentStart", "a1", "writer")
+    _subagent(hook_input, "SubagentStart", "a2", "writer")
+    _block(hook_input, "a2", "writer", BLOCK_CURL)
+    out = _report("--repo", hook_input()["cwd"]).stdout
+    assert "| writer 1 | 1 | open |  | a1 |" in out
+    assert "| writer 2 | 2 | open |  | a2 |" in out
+    assert "- seq 3 writer 2 " in out
 
 
 def test_symlinked_out_is_refused(marked_data: Path, hook_input: Any, tmp_path: Path) -> None:
@@ -599,8 +612,8 @@ def test_controls_seconds_to_first_write_per_agent(
 ) -> None:
     repo = _controls_chain(hook_input, monkeypatch)
     out = _report("--repo", repo, "--controls").stdout
-    assert "| a1 | coder | 9.0 |" in out
-    assert "| a2 | auditor | none |" in out
+    assert "| coder | 9.0 |" in out
+    assert "| auditor | none |" in out
 
 
 def test_controls_shows_ask_as_its_own_row(marked_data: Path, hook_input: Any) -> None:
@@ -708,7 +721,7 @@ def test_summary_carries_the_controls_table(
     repo = _controls_chain(hook_input, monkeypatch)
     out = _report("--repo", repo).stdout
     assert "## Subagent timeline" in out and "## Control cost" in out
-    assert "| jail | main | 1 | 0 |" in out and "| a1 | coder | 9.0 |" in out
+    assert "| jail | main | 1 | 0 |" in out and "| coder | 9.0 |" in out
 
 
 def test_containment_error_names_the_matched_path(

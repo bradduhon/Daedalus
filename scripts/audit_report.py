@@ -28,7 +28,7 @@ from lib.audit import (  # noqa: E402
 from lib.config import ConfigError, load_config  # noqa: E402
 from lib.controls import Control, ControlsError, failure_line  # noqa: E402
 from lib.controls import load as load_controls  # noqa: E402
-from token_economy import audit_lines  # noqa: E402
+from token_economy import agent_labels, audit_lines  # noqa: E402
 from verify_audit_chain import NOT_UTF8, verify_lines  # noqa: E402
 
 # 22: the --help text, kept below the future import as a plain string.
@@ -136,8 +136,13 @@ def md_escape(value: object, limit: int | None = None) -> str:
     return " ".join(text.splitlines())
 
 
-def _timeline(records: list[dict[str, object]]) -> list[str]:
-    # 0114: a start opens a row; a stop closes its id's newest open row, else opens a resume row.
+def _who(rec: dict[str, object], labels: dict[str, str]) -> str:
+    # D5: an agent reads as its role label; a record with no known agent id keeps its type.
+    return labels.get(str(rec.get("agent_id")), str(rec.get("agent_type")))
+
+
+def _timeline(records: list[dict[str, object]], labels: dict[str, str]) -> list[str]:
+    # D5: the raw agent id trails as the grep key. 0114: a start opens a row; a stop closes its id's newest open row, else opens a resume row.
     rows: list[dict[str, object]] = []
     open_rows: dict[str, dict[str, object]] = {}
     stopped: set[str] = set()
@@ -162,30 +167,29 @@ def _timeline(records: list[dict[str, object]]) -> list[str]:
     lines = [
         "## Subagent timeline",
         "",
-        "| agent_id | agent_type | start seq | stop seq | last message |",
+        "| agent | start seq | stop seq | last message | agent_id |",
         "|---|---|---|---|---|",
     ]
     for row in rows:
         start = "-" if row["start"] is None else row["start"]
         stop = "open" if row["stop"] is None else row["stop"]
         head = md_escape(row["head"], TIMELINE_CHARS)
-        lines.append(
-            f"| {md_escape(row['id'])} | {md_escape(row['type'])} | {start} | {stop} | {head} |"
-        )
+        who = labels.get(str(row["id"]), str(row["type"]))
+        lines.append(f"| {md_escape(who)} | {start} | {stop} | {head} | {md_escape(row['id'])} |")
     return lines
 
 
-def _tool_table(records: list[dict[str, object]]) -> list[str]:
+def _tool_table(records: list[dict[str, object]], labels: dict[str, str]) -> list[str]:
     counts: dict[tuple[str, str], Counter[str]] = {}
     for rec in records:
         if rec.get("event") != "PreToolUse" or rec.get("tool_name") not in _TOOLS:
             continue
-        key = (str(rec.get("agent_type")), str(rec["tool_name"]))
+        key = (_who(rec, labels), str(rec["tool_name"]))
         counts.setdefault(key, Counter())[str(rec.get("decision"))] += 1
     lines = [
         "## Write, Edit and Bash calls",
         "",
-        "| agent_type | tool | allow | warn | block |",
+        "| agent | tool | allow | warn | block |",
         "|---|---|---|---|---|",
     ]
     for (agent_type, tool), tally in sorted(counts.items()):
@@ -194,7 +198,7 @@ def _tool_table(records: list[dict[str, object]]) -> list[str]:
     return lines
 
 
-def _blocks(records: list[dict[str, object]]) -> list[str]:
+def _blocks(records: list[dict[str, object]], labels: dict[str, str]) -> list[str]:
     lines = ["## Blocks", ""]
     for rec in records:
         decision = rec.get("decision")
@@ -202,7 +206,7 @@ def _blocks(records: list[dict[str, object]]) -> list[str]:
             # 92: a warned call is listed with its word, as an ask is.
             ask = f" ({decision})" if decision in ("ask", _WARNED) else ""
             lines.append(
-                f"- seq {rec.get('seq')} {md_escape(rec.get('agent_type'))} "
+                f"- seq {rec.get('seq')} {md_escape(_who(rec, labels))} "
                 f"{md_escape(rec.get('tool_name'))}{ask}: {md_escape(rec.get('reason'))}"
             )
     if len(lines) == 2:
@@ -210,7 +214,7 @@ def _blocks(records: list[dict[str, object]]) -> list[str]:
     return lines
 
 
-def _status_lines(records: list[dict[str, object]]) -> list[str]:
+def _status_lines(records: list[dict[str, object]], labels: dict[str, str]) -> list[str]:
     lines = ["## Status lines", ""]
     for rec in records:
         for field in ("last_message_head", "reason"):
@@ -220,7 +224,7 @@ def _status_lines(records: list[dict[str, object]]) -> list[str]:
             for line in text.splitlines():
                 if any(p.search(line) for p in _STATUS):
                     lines.append(
-                        f"- seq {rec.get('seq')} {md_escape(rec.get('agent_type'))}: "
+                        f"- seq {rec.get('seq')} {md_escape(_who(rec, labels))}: "
                         f"{md_escape(line.strip(), STATUS_CHARS)}"
                     )
     if len(lines) == 2:
@@ -289,16 +293,14 @@ def _control_rows() -> dict[str, Control]:
         raise ReportError(str(exc)) from exc
 
 
-def _controls(records: list[dict[str, object]]) -> list[str]:
-    # 6.2: hook names, agent types, tools and timings only; no reason body or reply text.
+def _controls(records: list[dict[str, object]], labels: dict[str, str]) -> list[str]:
+    # 6.2: hook names, agent labels, tools and timings only; no reason body or reply text.
     pre = [r for r in records if r.get("event") == "PreToolUse"]
     blocks = [r for r in pre if r.get("decision") in _REFUSALS]
-    tally = Counter((_hook_of(r), str(r.get("agent_type"))) for r in blocks)
-    warned = Counter(
-        (_hook_of(r), str(r.get("agent_type"))) for r in pre if r.get("decision") == _WARNED
-    )
+    tally = Counter((_hook_of(r), _who(r, labels)) for r in blocks)
+    warned = Counter((_hook_of(r), _who(r, labels)) for r in pre if r.get("decision") == _WARNED)
     lines = ["## Control cost", "", "### Blocks per hook", ""]
-    lines += ["| hook | agent_type | blocks | warned |", "|---|---|---|---|"]
+    lines += ["| hook | agent | blocks | warned |", "|---|---|---|---|"]
     lines += [
         f"| {md_escape(h)} | {md_escape(a)} | {tally[(h, a)]} | {warned[(h, a)]} |"
         for h, a in sorted(set(tally) | set(warned))
@@ -309,16 +311,17 @@ def _controls(records: list[dict[str, object]]) -> list[str]:
         # pin B2 -> B6: the Phase 3 contradiction item reads one failure line per hook.
         lines += [f"- {md_escape(hook)}", f"  {failure_line(hook, rows)}"]
     lines += ["", "### Seconds from each block to that agent's next allowed call", ""]
-    lines += ["| seq | agent_type | hook | tool | seconds |", "|---|---|---|---|---|"]
+    lines += ["| seq | agent | hook | tool | seconds |", "|---|---|---|---|---|"]
     for rec in blocks:
-        cells = [rec.get("agent_type"), _hook_of(rec), rec.get("tool_name")]
+        cells = [_who(rec, labels), _hook_of(rec), rec.get("tool_name")]
         named = " | ".join(md_escape(c) for c in cells)
         lines.append(f"| {rec.get('seq')} | {named} | {_until_allowed(pre, rec)} |")
     lines += ["", "### Seconds from agent start to its first allowed Write or Edit", ""]
-    lines += ["| agent_id | agent_type | seconds |", "|---|---|---|"]
+    lines += ["| agent | seconds |", "|---|---|"]
     for start in (r for r in records if r.get("event") == "SubagentStart" and r.get("agent_id")):
-        named = f"{md_escape(start['agent_id'])} | {md_escape(start.get('agent_type'))}"
-        lines.append(f"| {named} | {_until_allowed(pre, start, _EDIT_TOOLS)} |")
+        lines.append(
+            f"| {md_escape(_who(start, labels))} | {_until_allowed(pre, start, _EDIT_TOOLS)} |"
+        )
     judged = [r.get("judge_ms") for r in pre]
     timed = [float(ms) for ms in judged if isinstance(ms, (int, float))]
     lines.append("")
@@ -352,16 +355,17 @@ def render(path: Path, controls_only: bool = False) -> str:
     header.extend((f"records: {count}", f"head={head}"))
     if records and records[0].get("project_root"):
         header.append(f"project_root: {md_escape(records[0]['project_root'])}")
+    labels = agent_labels(path.stem, _repo_of(records, path), records)
     if controls_only:
-        sections = [header, _controls(records)]
+        sections = [header, _controls(records, labels)]
     else:
         sections = [
             header,
-            _timeline(records),
-            _tool_table(records),
-            _blocks(records),
-            _controls(records),
-            _status_lines(records),
+            _timeline(records, labels),
+            _tool_table(records, labels),
+            _blocks(records, labels),
+            _controls(records, labels),
+            _status_lines(records, labels),
             _totals(records, path),
             # Plan 11 A item 2: the token totals and per-unit means, from the one reader.
             audit_lines(path.stem, _repo_of(records, path), records),

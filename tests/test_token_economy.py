@@ -578,3 +578,26 @@ def test_history_still_reads_the_old_scratch_place_and_save_never_writes_there(
     assert "20261014-120000" in te.history(repo_cwd)
     _save(repo_cwd, capsys, None)
     assert [p.name for p in old.parent.parent.iterdir()] == ["20261014-120000"]
+
+
+def _starts(*pairs: tuple[str, str]) -> list[dict[str, object]]:
+    return [
+        {"event": "SubagentStart", "agent_id": i, "agent_type": t, "seq": n}
+        for n, (i, t) in enumerate(pairs, 1)
+    ]
+
+
+def test_agent_labels_name_role_and_unit_or_round(home: Path, tmp_path: Path) -> None:
+    # D5: the audit report's agent label is the role plus the unit or round the transcript names.
+    _train(home)
+    records = _starts(
+        ("orch", "daedalus:orchestrator"), ("coder", "daedalus:coder"), ("aud", "daedalus:auditor")
+    )
+    labels = te.agent_labels(SESSION, tmp_path / "repo", records)
+    assert labels == {"orch": "orchestrator", "coder": "coder a1", "aud": "auditor round 1"}
+
+
+def test_agent_labels_number_a_role_with_no_unit_by_first_start(home: Path, tmp_path: Path) -> None:
+    records = _starts(("w2", "writer"), ("x1", "coder"), ("w1", "writer"))
+    labels = te.agent_labels(SESSION, tmp_path / "repo", records)
+    assert labels == {"w2": "writer 1", "w1": "writer 2", "x1": "coder"}
