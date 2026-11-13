@@ -3,6 +3,7 @@
 # 0267, 0280: the auditor's model from the highest merged class, and the class check first.
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -202,18 +203,23 @@ def test_the_class_check_runs_on_the_top_model_in_an_all_plumbing_run(tmp_path: 
 
 def test_a_raised_unit_raises_the_auditor_and_is_recorded(tmp_path: Path) -> None:
     root = _merged(_run(tmp_path / "repo"), "U1", "U2")
-    _check_file(root, "U1 | Plumbing | class ok", "u2 | Plumbing | AuthN | web/u2.html:login")
-    code, out = _cli(root, "class-check")
-    assert code == 0, out
-    assert out.splitlines() == [
+    path = _check_file(
+        root, "U1 | Plumbing | class ok", "u2 | Plumbing | AuthN | web/u2.html:login"
+    )
+    want = (
+        "auditor U2: opus | class: AuthN | class check: raised from Plumbing at web/u2.html:login"
+    )
+    checked = [
         "class check U1: Plumbing | class ok",
         "class check U2: Plumbing -> AuthN (opus) at web/u2.html:login | raised",
         "Class raised: web/u2.html:login work-class | high | work-class",
         "class check: 2 unit(s), 1 raised, round 1",
     ]
+    assert _model(root) == (0, ["opus", want, *checked])
     check = train_state.load(root, TRAIN)[train_state.CLASS_CHECK]
     assert check == {
         "round": 1,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "units": {
             "U1": {"planned": "Plumbing", "class": None, "place": None, "raised": False},
             "U2": {
@@ -224,12 +230,12 @@ def test_a_raised_unit_raises_the_auditor_and_is_recorded(tmp_path: Path) -> Non
             },
         },
     }
-    want = (
-        "auditor U2: opus | class: AuthN | class check: raised from Plumbing at web/u2.html:login"
-    )
-    assert _model(root) == (0, ["opus", want])
     picked = train_state.load(root, TRAIN)[train_state.AUDITOR_MODEL]
     assert picked == {"model": "opus", "class": "AuthN", "unit": "U2", "raised_from": "Plumbing"}
+    # A reread of the same file after round 1 keeps the check bound to round 1.
+    _rejected(root, 1, "web/u2.html:login work-class")
+    assert _model(root)[1][-1] == "class check: 2 unit(s), 1 raised, round 1"
+    assert train_state.load(root, TRAIN)[train_state.CLASS_CHECK]["round"] == 1  # type: ignore[index]
 
 
 def test_a_lower_or_level_class_is_recorded_and_raises_nothing(tmp_path: Path) -> None:
@@ -239,10 +245,10 @@ def test_a_lower_or_level_class_is_recorded_and_raises_nothing(tmp_path: Path) -
         "U1 | Plumbing | Mechanical | scripts/lib/jail.py:rename",
         "U2 | AuthN | AuthZ | web/u2.html:login",
     )
-    code, out = _cli(root, "class-check")
-    assert code == 0, out
-    assert "Class raised:" not in out and out.splitlines()[-1].endswith("0 raised, round 1")
-    assert _model(root) == (0, ["opus", AUTHN_LINE])
+    code, lines = _model(root)
+    assert code == 0 and lines[:2] == ["opus", AUTHN_LINE], lines
+    assert not any(line.startswith("Class raised:") for line in lines)
+    assert lines[-1] == "class check: 2 unit(s), 0 raised, round 1"
 
 
 @pytest.mark.parametrize(
@@ -268,38 +274,43 @@ def test_a_bad_class_check_file_is_refused_and_records_nothing(
 ) -> None:
     root = _merged(_run(tmp_path / "repo"), "U1", "U2")
     _check_file(root, *lines)
-    code, out = _cli(root, "class-check")
-    assert code == 1 and says in out, out
-    assert out.count("Next:") == 1 and "rerun class-check" in out
-    assert train_state.CLASS_CHECK not in train_state.load(root, TRAIN)
+    code, out = _model(root)
+    assert code == 1 and len(out) == 1 and says in out[0], out
+    assert out[0].count("Next:") == 1 and "rewrite the class check file, then rerun model" in out[0]
+    state = train_state.load(root, TRAIN)
+    assert train_state.CLASS_CHECK not in state and train_state.AUDITOR_MODEL not in state
 
 
 def test_a_class_the_settings_do_not_list_is_refused_where_it_is_read(tmp_path: Path) -> None:
     root = _merged(_run(tmp_path / "repo"), "U1", "U2")
     _check_file(root, "U1 | Plumbing | class ok", "U2 | Plumbing | AuthN | web/u2.html:login")
-    _ok(train_runner.record_class_check(root))
-    # The settings drop AuthN after the check: the model command refuses, never the middle model.
+    _ok(train_runner.auditor_model(root))
+    # The settings drop AuthN after the check: the reread file is refused, never the middle model.
     path = Path.home() / operator_file.OPERATOR_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = [{"name": "Plumbing", "definition": "Any other work."}]
     path.write_text(json.dumps({"work_classes": rows, "class_models": {"Plumbing": "sonnet"}}))
     code, lines = _model(root)
     assert code == 1 and len(lines) == 1
+    assert "names the class AuthN, which the work classes settings do not list" in lines[0]
+    # With the file gone, the recorded raise is held to the settings the same way.
+    train_runner.class_check_path(root, TRAIN).unlink()
+    code, lines = _model(root)
+    assert code == 1 and len(lines) == 1
     assert "raised unit U2 to the class AuthN, which the work classes settings no" in lines[0]
-    code, out = _cli(root, "class-check")
-    assert code == 1 and "names the class AuthN, which the work classes settings do not" in out
 
 
-def test_a_missing_class_check_file_is_refused(tmp_path: Path) -> None:
+def test_a_class_check_path_that_is_not_a_file_is_refused(tmp_path: Path) -> None:
     root = _merged(_run(tmp_path / "repo"), "U1", "U2")
-    code, out = _cli(root, "class-check")
-    assert code == 1 and "is not a regular file" in out and "Next:" in out
+    train_runner.class_check_path(root, TRAIN).mkdir(parents=True)
+    code, lines = _model(root)
+    assert code == 1 and "is not a regular file" in lines[0] and "Next:" in lines[0]
 
 
 def test_the_round_after_a_raise_lists_its_row_before_a_verdict_records(tmp_path: Path) -> None:
     root = _merged(_run(tmp_path / "repo"), "U1", "U2")
     _check_file(root, "U1 | Plumbing | class ok", "U2 | Plumbing | AuthN | web/u2.html:login")
-    _ok(train_runner.record_class_check(root))
+    _ok(train_runner.auditor_model(root))
     path = findings_path(root, TRAIN, 1)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("F1 | high | code\n", encoding="utf-8")
@@ -325,14 +336,13 @@ def test_the_summary_names_the_auditor_model_and_each_raised_unit(tmp_path: Path
         "Auditor model: sonnet, from unit U1 of class Plumbing"
     ]
     _check_file(root, "U1 | Plumbing | class ok", "U2 | Plumbing | class ok")
-    _ok(train_runner.record_class_check(root))
+    _ok(train_runner.auditor_model(root))
     state = train_state.load(root, TRAIN)
     assert train_summary._audit_model(state, root, None)[-1] == (
         "Class check: no unit raised (2 checked)"
     )
     _check_file(root, "U1 | Plumbing | class ok", "U2 | Plumbing | Secrets | web/u2.html:key")
-    _ok(train_runner.record_class_check(root))
-    _model(root)
+    _ok(train_runner.auditor_model(root))
     state = train_state.load(root, TRAIN)
     raised = [RAISED_MODEL, "Class check raised U2 from Plumbing to Secrets"]
     assert train_summary._audit_model(state, root, None) == raised
@@ -349,8 +359,8 @@ def test_the_audit_skill_runs_the_class_check_then_the_model_then_round_one() ->
     order = [
         "daedalus_train.py model --repo <repo> --agent auditor --class-check`",
         "first line is `Mode: class-check`",
-        "daedalus_train.py class-check --repo <repo>`",
         "daedalus_train.py model --repo <repo> --agent auditor`",
+        "it first reads the class check file, refuses a class the settings do not list",
         "Dispatch `auditor` with `model: <that word>` and: the diff base",
         "in round 1, each `Class raised:` line of the class check",
     ]

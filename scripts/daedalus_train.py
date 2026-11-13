@@ -43,7 +43,6 @@ from lib.train_runner import (  # noqa: E402
     fix_unit,
     progress,
     reaudit,
-    record_class_check,
     record_docs_verdict,
     record_exception,
     record_ledger,
@@ -68,8 +67,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
-        "class-check, brief-check, ask-check, packs, writer-clear, assets, refuted, grant, "
-        "dispatch, route, finish-unit, fix-unit, providers, validate. "
+        "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch, route, "
+        "finish-unit, fix-unit, providers, validate. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -144,8 +143,6 @@ def _parser() -> argparse.ArgumentParser:
     model.add_argument("--unit")
     # 0280: --agent auditor --class-check prints the class check's model and its input lines.
     model.add_argument("--class-check", dest="class_check", action="store_true")
-    # 0280: the class check's file read, its classes held to the settings, and recorded.
-    sub.add_parser("class-check").add_argument("--repo", type=Path, required=True)
     # issue 187: one REFUTED verifier reply recorded on the unit.
     refute = sub.add_parser("refuted")
     refute.add_argument("--repo", type=Path, required=True)
@@ -577,8 +574,6 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return summary(repo)
     if args.action == "model":
         return _model(repo, args.agent, args.override, args.unit, args.class_check)
-    if args.action == "class-check":
-        return record_class_check(repo)
     if args.action == "refuted":
         return refuted(repo, args.unit, args.operator_check)
     if args.action == "brief-check":

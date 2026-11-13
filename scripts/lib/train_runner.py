@@ -1522,30 +1522,13 @@ _MODEL_SETTINGS_NEXT = (
 )
 
 
-def _class_settings(repo: Path, rerun: str = "model") -> operator_file.Operator:
-    try:
-        return operator_file.load(repo)
-    except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
-        next_line = _MODEL_SETTINGS_NEXT.replace("rerun model.", f"rerun {rerun}.")
-        raise RunnerError(f"{exc}\n{next_line}") from exc
-
-
-def _unit_class(planned: plan_record.Unit, operator: operator_file.Operator) -> str:
-    # 0270: a class the plan names and the settings no longer hold is refused, never the middle.
-    name = planned.effective_class
-    if planned.work_class is not None and name not in {n for n, _ in operator.work_classes}:
-        raise RunnerError(
-            f"unit {planned.id} names the class {name}, which the work classes settings no "
-            f"longer hold. Next: add {name} back to work_classes, or give unit {planned.id} "
-            "a class the settings hold and record the plan again."
-        )
-    return name
-
-
 def unit_model(cwd: Path, agent: str, unit_id: str) -> Outcome:
     # 0267, 0270: the unit's class and the mapping pick the model; the coder's is recorded.
     def edit(repo: Path, train_id: str) -> list[str]:
-        operator = _class_settings(repo)
+        try:
+            operator = operator_file.load(repo)
+        except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
+            raise RunnerError(f"{exc}\n{_MODEL_SETTINGS_NEXT}") from exc
         try:
             state = train_state.load(repo, train_id)
             if not train_state.record(state, train_state.PLAN):
@@ -1581,6 +1564,25 @@ def unit_model(cwd: Path, agent: str, unit_id: str) -> Outcome:
         return [model, line]
 
     return _recorded(cwd, edit)
+
+
+def _class_settings(repo: Path) -> operator_file.Operator:
+    try:
+        return operator_file.load(repo)
+    except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
+        raise RunnerError(f"{exc}\n{_MODEL_SETTINGS_NEXT}") from exc
+
+
+def _unit_class(planned: plan_record.Unit, operator: operator_file.Operator) -> str:
+    # 0270: a class the plan names and the settings no longer hold is refused, never the middle.
+    name = planned.effective_class
+    if planned.work_class is not None and name not in {n for n, _ in operator.work_classes}:
+        raise RunnerError(
+            f"unit {planned.id} names the class {name}, which the work classes settings no "
+            f"longer hold. Next: add {name} back to work_classes, or give unit {planned.id} "
+            "a class the settings hold and record the plan again."
+        )
+    return name
 
 
 CLASS_CHECK_FILE = "class-check.txt"
@@ -1626,17 +1628,13 @@ def _merged_units(
 
 
 def _audit_units(
-    repo: Path,
-    train_id: str,
-    state: dict[str, object],
-    operator: operator_file.Operator,
-    rerun: str,
+    repo: Path, train_id: str, state: dict[str, object], operator: operator_file.Operator
 ) -> list[tuple[plan_record.Unit, dict[str, object], str]]:
     # 0280: the merged units the audit judges, each with its class; none is refused.
     if not train_state.record(state, train_state.PLAN):
         raise RunnerError(
             f"run {train_id} records no plan, so no merged unit has a class. Next: record the "
-            f"plan with daedalus_train.py plan --path, then rerun {rerun}."
+            "plan with daedalus_train.py plan --path, then rerun model."
         )
     try:
         merged = _merged_units(repo, train_id, state)
@@ -1645,7 +1643,7 @@ def _audit_units(
     if not merged:
         raise RunnerError(
             f"no unit of run {train_id} is merged into daedalus/{train_id}, so the audit has no "
-            f"class to read. Next: merge the verified units with finish-unit, then rerun {rerun}."
+            "class to read. Next: merge the verified units with finish-unit, then rerun model."
         )
     return [(planned, unit, _unit_class(planned, operator)) for planned, unit in merged]
 
@@ -1666,7 +1664,8 @@ def auditor_model(cwd: Path) -> Outcome:
     def edit(repo: Path, train_id: str) -> list[str]:
         operator = _class_settings(repo)
         state = train_state.load(repo, train_id)
-        merged = _audit_units(repo, train_id, state, operator, "model")
+        merged = _audit_units(repo, train_id, state, operator)
+        check, checked = _class_check(repo, train_id, state, merged, operator)
         held = {n for n, _ in operator.work_classes}
         # (unit, class, line tail, planned class when the class check raised it)
         rows: list[tuple[str, str, str, str | None]] = []
@@ -1674,7 +1673,7 @@ def auditor_model(cwd: Path) -> Outcome:
             reason = f" | class_reason: {planned.class_reason}" if planned.class_reason else ""
             rows.append((planned.id, name, reason, None))
         ids = {planned.id for planned, _, _ in merged}
-        for uid, raised in _raised(train_state.record(state, train_state.CLASS_CHECK)).items():
+        for uid, raised in _raised(check).items():
             name, was = _text(raised, "class"), _text(raised, "planned")
             if uid not in ids:
                 continue
@@ -1690,8 +1689,11 @@ def auditor_model(cwd: Path) -> Outcome:
         model = work_classes.model_for(cls, operator)
         entry: dict[str, object] = {"model": model, "class": cls, "unit": top}
         entry["raised_from"] = was_top
-        train_state.update(repo, train_id, **{train_state.AUDITOR_MODEL: entry})
-        return [model, f"auditor {top}: {model} | class: {cls}{tail}"]
+        fields: dict[str, object] = {train_state.AUDITOR_MODEL: entry}
+        if check:
+            fields[train_state.CLASS_CHECK] = check
+        train_state.update(repo, train_id, **fields)
+        return [model, f"auditor {top}: {model} | class: {cls}{tail}", *checked]
 
     return _recorded(cwd, edit)
 
@@ -1701,7 +1703,7 @@ def class_check_input(cwd: Path) -> Outcome:
     def edit(repo: Path, train_id: str) -> list[str]:
         operator = _class_settings(repo)
         state = train_state.load(repo, train_id)
-        merged = _audit_units(repo, train_id, state, operator, "model")
+        merged = _audit_units(repo, train_id, state, operator)
         top = work_classes.TOP_MODEL
         lines = [
             top,
@@ -1727,7 +1729,7 @@ def _check_rows(
     # 0280: one `<unit> | <planned class> | class ok` or `... | <class> | <place>` per merged unit.
     planned = {p.id.casefold(): (p.id, name) for p, _, name in merged}
     held = {n for n, _ in operator.work_classes}
-    rerun = "Next: have the auditor rewrite the class check file, then rerun class-check."
+    rerun = "Next: have the auditor rewrite the class check file, then rerun model."
     rows: dict[str, dict[str, object]] = {}
     places: set[str] = set()
     for number, raw in enumerate(text.splitlines(), start=1):
@@ -1780,45 +1782,49 @@ def _check_rows(
     return rows
 
 
-def record_class_check(cwd: Path) -> Outcome:
-    # 0280: the class check's file read once, its classes held to the settings, then recorded.
-    def edit(repo: Path, train_id: str) -> list[str]:
-        operator = _class_settings(repo, "class-check")
-        state = train_state.load(repo, train_id)
-        merged = _audit_units(repo, train_id, state, operator, "class-check")
-        path = class_check_path(repo, train_id)
-        if path.is_symlink() or not path.is_file():
-            raise RunnerError(
-                f"{path} is not a regular file. Next: have the auditor write the class check "
-                "there, then rerun class-check."
-            )
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            raise RunnerError(f"cannot read {path} ({exc}). Next: make it a UTF-8 file.") from exc
-        rows = _check_rows(text, path, merged, operator)
-        round_ = derived_round(state)
-        record = {"round": round_, "units": rows}
-        train_state.update(repo, train_id, **{train_state.CLASS_CHECK: record})
-        lines: list[str] = []
-        raised: list[str] = []
-        for uid, entry in rows.items():
-            name = _text(entry, "planned")
-            checked = _text(entry, "class")
-            if not checked:
-                lines.append(f"class check {uid}: {name} | {CLASS_OK}")
-                continue
-            model = work_classes.model_for(checked, operator)
-            mark = " | raised" if entry["raised"] else ""
-            place = _text(entry, "place")
-            lines.append(f"class check {uid}: {name} -> {checked} ({model}) at {place}{mark}")
-            if entry["raised"]:
-                key = raised_key(place)
-                raised.append(f"Class raised: {key}{_SEP}{CLASS_SEVERITY}{_SEP}{CLASS_FINDING}")
-        tail = f"class check: {len(rows)} unit(s), {len(raised)} raised, round {round_}"
-        return [*lines, *raised, tail]
-
-    return _recorded(cwd, edit)
+def _class_check(
+    repo: Path,
+    train_id: str,
+    state: dict[str, object],
+    merged: list[tuple[plan_record.Unit, dict[str, object], str]],
+    operator: operator_file.Operator,
+) -> tuple[dict[str, object], list[str]]:
+    # 0280: the class check file, when the auditor wrote one, read and held to the settings.
+    prior = train_state.record(state, train_state.CLASS_CHECK)
+    path = class_check_path(repo, train_id)
+    if not path.exists() and not path.is_symlink():
+        return prior, []
+    if path.is_symlink() or not path.is_file():
+        raise RunnerError(
+            f"{path} is not a regular file. Next: have the auditor write the class check there, "
+            "then rerun model."
+        )
+    try:
+        data = path.read_bytes()
+        text = data.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RunnerError(f"cannot read {path} ({exc}). Next: make it a UTF-8 file.") from exc
+    rows = _check_rows(text, path, merged, operator)
+    sha = _sha256(data)
+    # 0280: a reread of the same file keeps its round; a new check binds the next round.
+    same = _text(prior, "sha256") == sha
+    round_ = _int(prior, "round", 0) if same else derived_round(state)
+    lines: list[str] = []
+    raised: list[str] = []
+    for uid, entry in rows.items():
+        name, checked = _text(entry, "planned"), _text(entry, "class")
+        if not checked:
+            lines.append(f"class check {uid}: {name} | {CLASS_OK}")
+            continue
+        model = work_classes.model_for(checked, operator)
+        mark = " | raised" if entry["raised"] else ""
+        place = _text(entry, "place")
+        lines.append(f"class check {uid}: {name} -> {checked} ({model}) at {place}{mark}")
+        if entry["raised"]:
+            key = raised_key(place)
+            raised.append(f"Class raised: {key}{_SEP}{CLASS_SEVERITY}{_SEP}{CLASS_FINDING}")
+    tail = f"class check: {len(rows)} unit(s), {len(raised)} raised, round {round_}"
+    return {"round": round_, "sha256": sha, "units": rows}, [*lines, *raised, tail]
 
 
 REFUTATIONS = "refutations"
