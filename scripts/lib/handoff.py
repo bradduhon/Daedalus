@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from lib import agent_files, storage
+from lib import agent_files, atomic, storage
 from lib.config import Config
 from lib.context_size import (
     Handling,
@@ -103,6 +103,12 @@ def limit_for(config: Config) -> int | None:
     return active_limit(overlay(load_user(), config.operator).context_limit)
 
 
+# 0284: the one resume line of the hand-off write, and the brief line naming the hand-off file.
+WRITE_LINE = "Write your hand-off"
+BRIEF_PREFIX = "Hand-off: "
+FILE_MODE = 0o600
+
+
 def handoff_path(hook_input: dict[str, object]) -> Path | None:
     # 0284: one hand-off file per agent; the host's own cwd, not a run binding's, names the project.
     agent_id = hook_input.get("agent_id")
@@ -178,6 +184,42 @@ def _past(hook_input: dict[str, object], agent: str, shown: dict[str, int], root
         return Outcome(Step.ADMIT, ADMITTED)
     text = R_HANDOFF_WRITTEN if written(path) else R_PAST_LIMIT
     return Outcome(Step.REFUSE, text.format(path=path, **shown))
+
+
+def inline_text(reply: str) -> str | None:
+    # 0284: the last `## Hand-off` section of an inline reply, up to its status line.
+    lines = reply.rstrip().splitlines()
+    heads = [i for i, line in enumerate(lines[:-1]) if line.strip() == HEADING]
+    if not heads or lines[-1].strip() != f"{STATUS} {INLINE}":
+        return None
+    body = "\n".join(lines[heads[-1] : -1]).strip()
+    return body + "\n" if body != HEADING else None
+
+
+def save_inline(hook_input: dict[str, object], reply: str) -> Path | None:
+    # 0284: the run's copy of an inline hand-off at the agent's own path; a new agent reads a file.
+    path, text = handoff_path(hook_input), inline_text(reply)
+    if path is None or text is None or not _leaf_ok(path):
+        return None
+    made = storage.make_tmp_dir(FEATURE, str(hook_input.get("payload_cwd") or hook_input["cwd"]))
+    if os.path.realpath(made) != str(path.parent) or not _leaf_ok(path):
+        return None
+    atomic.write_atomic(path, text, FILE_MODE)
+    return path
+
+
+def recorded_tokens(units: list[dict[str, object]], agent: str) -> int | None:
+    # 0284: the largest size any unit recorded for the agent at a return; a context only grows.
+    from lib.train_state import SIZES
+
+    found: list[int] = []
+    for unit in units:
+        sizes = unit.get(SIZES)
+        cell = sizes.get(agent) if isinstance(sizes, dict) else None
+        tokens = cell.get("tokens") if isinstance(cell, dict) else None
+        if isinstance(tokens, int) and not isinstance(tokens, bool):
+            found.append(tokens)
+    return max(found) if found else None
 
 
 def check(

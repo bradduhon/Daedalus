@@ -362,6 +362,51 @@ def judge(hook_input: dict[str, object]) -> str | None:
     return f"Daedalus hand-back check: {problem}. Next: {fix}."
 
 
+def record_return(hook_input: dict[str, object]) -> None:
+    # 0284: a passing return records the agent's size on its unit, and its hand-off with the file.
+    from lib import handoff, train_state, unit_binding
+    from lib.context_size import Measured, agent_id_ok, context_size
+    from lib.project_root import project_root
+    from lib.train_scope import KNOWN_AGENTS
+
+    reply, agent_id, cwd = _reply(hook_input), hook_input.get("agent_id"), hook_input.get("cwd")
+    if not isinstance(reply, str) or not reply.strip() or not agent_id_ok(agent_id):
+        return
+    if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        return
+    if _agent(hook_input) not in KNOWN_AGENTS - {"main"}:
+        return
+    repo = project_root(Path(cwd))
+    train = train_state.active_train(repo)
+    if train is None:
+        return
+    size = context_size(
+        hook_input.get("transcript_path"), hook_input.get("session_id"), str(agent_id)
+    )
+    cell: dict[str, object] = (
+        {"tokens": size.tokens} if isinstance(size, Measured) else {"reason": size.reason.label}
+    )
+    last = [line.strip() for line in reply.splitlines() if line.strip()][-1]
+    path = None
+    if last == f"{handoff.STATUS} {handoff.INLINE}":
+        path = handoff.save_inline(hook_input, reply)
+    elif last.startswith(handoff.STATUS):
+        path = handoff.handoff_path(hook_input)
+    unit = unit_binding.bound_units(repo, train).get(str(agent_id))
+    file = str(path) if path is not None else None
+    train_state.record_return(repo, train, unit, str(agent_id), cell, file)
+
+
+def _record(hook_input: dict[str, object]) -> None:
+    # 0284: a record that cannot be written is reported, never a block on the return.
+    from lib.train_state import TrainStateError
+
+    try:
+        record_return(hook_input)
+    except (OSError, RuntimeError, ValueError, TrainStateError) as exc:
+        print(f"daedalus-handback-check: size not recorded: {exc}", file=sys.stderr)
+
+
 def digest_output(hook_input: dict[str, object]) -> dict[str, object] | None:
     # 0205: a passing hand-back of a listed agent goes out as its digest; the report stays on disk.
     from lib import reply_digest
@@ -416,6 +461,7 @@ def main() -> int:
         elif reason is not None:
             print(json.dumps({"decision": "block", "reason": reason}))
         else:
+            _record(payload)
             _emit_digest(payload)
     except Exception as exc:  # noqa: BLE001
         # RCP: a broken check never stalls a train; the verifier still judges the unit.

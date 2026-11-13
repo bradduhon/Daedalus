@@ -184,6 +184,8 @@ def _parser() -> argparse.ArgumentParser:
     send.add_argument("--repo", type=Path, required=True)
     send.add_argument("--unit", required=True)
     send.add_argument("--warm")
+    # 0284: the one resume of a coder past the context limit, to write its hand-off.
+    send.add_argument("--handoff-write", dest="handoff_write", action="store_true")
     routed = sub.add_parser("route")
     routed.add_argument("--repo", type=Path, required=True)
     routed.add_argument("--unit", required=True)
@@ -589,7 +591,7 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "grant":
         return _grant(repo, args)
     if args.action == "dispatch":
-        return dispatch_unit(repo, args.unit, args.warm)
+        return dispatch_unit(repo, args.unit, args.warm, args.handoff_write)
     if args.action == "route":
         return route_unit(repo, args.unit, args.verdict, args.rows)
     if args.action == "finish-unit":
