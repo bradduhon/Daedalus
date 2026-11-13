@@ -35,6 +35,13 @@ REQ_F1 = "Make `tests/test_u1.py::test_f1` pass."
 REQ_F3 = "Make `tests/test_u1.py::test_f3` pass."
 HEX64 = "[0-9a-f]{64}"
 HEX40 = "[0-9a-f]{40}"
+# 0281: needs lines fix-unit must keep byte for byte, one a unit provides and one the user.
+PROVIDES = (
+    "provide: write access to the reports bucket | kind: permission | provider: U1 | "
+    "when: before U2 runs\n"
+    "provide: the deploy key | kind: secret | provider: user after deploy | "
+    "when: before the first deploy\n"
+)
 
 
 def _plan(root: Path) -> Path:
@@ -45,6 +52,7 @@ def _fixture(root: Path) -> Path:
     # The shared run fixture with requirements the validator and the dispatch gate accept.
     made = shared_fixture(root)
     valid = PLAN.replace("1. Refuse x.\n2. Admit y.", "1. Refuse `x`.\n2. Admit `y`.")
+    valid = valid.replace("graph: ", f"{PROVIDES}graph: ", 1)
     _plan(made).write_text(valid, encoding="utf-8")
     _ok(train_runner.record_plan(made, _plan(made)))
     return made
@@ -136,9 +144,15 @@ def test_fix_unit_writes_its_line_edge_section_and_graph(tmp_path: Path) -> None
         "graph: units=3 critical_path=2 width=2 overlap_only=none",
     ]
     assert text.endswith(f"\n### fix1-u1: repair the guard\n\nRequirements:\n1. {REQ_F1}\n")
+    # 0281: the needs lines stay byte for byte, ahead of the fix unit's lines.
+    assert block[-5:-3] == PROVIDES.splitlines()
+    assert PROVIDES in text
     # The plan file validates, its hash is the recorded one, and the gate's plan check passes.
     done = run_cli("validate_plan.py", str(_plan(root)))
     assert done.returncode == 0 and done.stdout.startswith("OK plan: graph: units=3"), done.stdout
+    assert done.stdout.splitlines()[1:] == [
+        f"OK {line}" for line in reversed(PROVIDES.splitlines())
+    ], done.stdout
     state = train_state.load(root, TRAIN)
     sha = hashlib.sha256(_plan(root).read_bytes()).hexdigest()
     assert state["plan"] == {"path": str(_plan(root)), "sha256": sha} and sha in out

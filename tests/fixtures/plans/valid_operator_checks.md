@@ -6,6 +6,7 @@ Two units: a scene that needs a browser and a GPU to see, and a headless physics
 ```plan
 unit: W1 | title: scene loader | files: web/src/scene.ts, web/src/scene.test.ts | base: integration | operator_checks: the scene loads with its models; the player can move with the arrow keys
 unit: W2 | title: physics step | files: web/src/physics.ts, web/src/physics.test.ts | base: integration
+provides: none
 graph: units=2 critical_path=1 width=2 overlap_only=none
 ```
 

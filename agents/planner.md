@@ -166,8 +166,18 @@ Markdown for the reader around exactly one fenced block the validator reads:
     edge: A6 ~ A7 | kind: overlap | files: <path>[, ...] | merge: A6 then A7
     pin: A5 -> A8 | <the flag, function or line shape both sides build to>
     version: <x.y.z> | class: <X, Y or Z> | reason: <one line> | unit: <unit id>
+    provide: <what> | kind: <kind> | provider: <unit id, user before merge, user after deploy or exists> | when: <when it must exist>
     graph: units=<n> critical_path=<k> width=<w> overlap_only=<pairs>
     ```
+
+The needs table (0281) is one `provide:` line per thing the work needs once it runs: a
+permission, a secret, a resource, an account or a document only the user holds, with `kind:`
+one of `permission`, `secret`, `resource`, `account`, `document` or `other`. Its provider is the
+unit of this plan that creates it, `user before merge`, `user after deploy`, or `exists` with
+`| seen: <where you saw it>`, so the plan never asks about what is already there. A plan whose
+work needs nothing at run time carries the one line `provides: none` in place of the table. A
+need the user must provide is written in the table with that provider, never asked as a
+question. Ask the user about a need only when no provider is defensible.
 
 Every unit lists its files, and its title says in plain words what it builds. Two units that
 share a file carry an overlap edge naming that file. The version line is optional and appears

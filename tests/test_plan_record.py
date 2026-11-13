@@ -268,7 +268,8 @@ def test_unknown_line_and_duplicate_unit_are_refused(tmp_path: Path) -> None:
     )
     defects = validate(plan, 5)
     assert any("unit U1 is declared twice" in d for d in defects), defects
-    assert any("is not a unit, edge, pin, version or graph line" in d for d in defects), defects
+    kinds = "is not a unit, edge, pin, version, graph, provide or provides: none line"
+    assert any(kinds in d for d in defects), defects
 
 
 def test_file_without_one_plan_block_is_refused(tmp_path: Path) -> None:
@@ -418,7 +419,7 @@ def test_two_version_lines_are_refused(tmp_path: Path) -> None:
 def test_cli_prints_the_version_line_after_the_ok_line(tmp_path: Path) -> None:
     path = tmp_path / "plan.md"
     sections = requirement_sections(ONE, BUMP)
-    block = f"```plan\n{ONE}\n{BUMP}\n{VERSION_LINE}\n{TWO_GRAPH}\n```\n"
+    block = f"```plan\n{ONE}\n{BUMP}\n{VERSION_LINE}\nprovides: none\n{TWO_GRAPH}\n```\n"
     path.write_text(block + sections, encoding="utf-8")
     proc = _cli(str(path))
     assert proc.returncode == 0, proc.stdout + proc.stderr
