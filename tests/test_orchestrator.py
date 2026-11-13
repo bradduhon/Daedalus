@@ -364,12 +364,12 @@ def test_recipe_names_the_verifier_step_and_the_one_pass_rule() -> None:
     refuted = next(ln for ln in route.splitlines() if ln.startswith("   - `[VERDICT: REFUTED]"))
     fix = 'SendMessage(that unit\'s coder, "FIX. The verifier refuted: <code and scope rows>")'
     assert fix in refuted
-    # 0161, 0187: the second goes to a fresh escalated coder, the third to the operator.
+    # 0161, 0267: the first and second go back warm on the unit's model, the third to the operator.
     assert (
-        "The second REFUTED on the same unit goes to a fresh coder on the `escalated` model "
-        "through the build phase's second-refutation step" in refuted
+        "The first and the second REFUTED on a unit (`fix`) each send that unit's coder one fix "
+        "pass, on the unit's own model," in refuted
     )
-    assert "and the run goes on (0187, issue 115)" in refuted
+    assert "escalated" not in refuted and "fresh coder" not in refuted
     assert "A third REFUTED on the same unit goes to the operator as a decision" in refuted
     assert any(ln.startswith("   - `[VERDICT: VERIFIED] claims=<n>`") for ln in route.splitlines())
     merge = _phase_step("build", 10)

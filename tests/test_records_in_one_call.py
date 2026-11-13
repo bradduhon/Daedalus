@@ -159,7 +159,7 @@ def _hand_dispatch(
     # build steps 1, 2, 4 and 5 as four separate calls.
     assert train_runner.choice(root, chose[0], chose[1], cost).code == 0
     path = workspace.create(root, f"{TRAIN}-{uid.lower()}", f"daedalus/{TRAIN}")
-    assert train_runner.coder_model(root, uid).code == 0
+    assert train_runner.unit_model(root, "coder", uid).code == 0
     _hand_brief(root, uid, path, packs)
     return path
 
@@ -217,7 +217,7 @@ def test_dispatch_leaves_what_choice_create_model_and_the_brief_leave(tmp_path: 
     assert _snapshot(seq) == _snapshot(one)
     brief = _scratch(one) / "briefs" / "u1.md"
     worktree = str(path).replace(str(seq), str(one))
-    assert lines[0] == f"dispatch U1: model=opus worktree={worktree} brief={brief} rows=needed"
+    assert lines[0] == f"dispatch U1: model=sonnet worktree={worktree} brief={brief} rows=needed"
     contract = f"{one}/contracts/api.md"
     lock = str(train_state.load(one, TRAIN)["lock_sha"])
     assert lines[1:-1] == [
@@ -256,43 +256,37 @@ def test_route_leaves_what_refuted_model_and_choice_leave(tmp_path: Path) -> Non
     seq, one, seq_path, one_path = _routed_pair(tmp_path)
     fix = ("a fix pass by unit U1's own coder", "a fresh coder")
     fix_cost = "one warm fix pass; the coder keeps its context"
-    fresh = (
-        "a fresh coder on the escalated model for unit U1",
-        "another fix pass by its own coder",
-    )
-    fresh_cost = "the fresh coder reads the brief, the unit's commits and the verifier's rows"
-    for count, (chose, cost, word) in enumerate(
-        [(fix, fix_cost, "fix"), (fresh, fresh_cost, "fresh")], start=1
-    ):
+    # 0267: the first and the second refutation are each a warm fix pass on the unit's model.
+    for count in (1, 2):
         _verdict(seq, seq_path, REFUTED_REPLY)
         _verdict(one, one_path, REFUTED_REPLY)
         assert _ok(train_runner.refuted(seq, "U1")) == [f"refuted U1: {count}"]
-        _ok(train_runner.coder_model(seq, "U1"))
-        _ok(train_runner.choice(seq, chose[0], chose[1], cost))
+        _ok(train_runner.unit_model(seq, "coder", "U1"))
+        _ok(train_runner.choice(seq, fix[0], fix[1], fix_cost))
         line = _ok(train_runner.route_unit(one, "U1", "REFUTED"))
-        assert line == [f"route U1: {word} model=opus refutations={count} checks=0"]
+        assert line == [f"route U1: fix model=sonnet refutations={count} checks=0"]
         assert _snapshot(seq) == _snapshot(one)
     # verify step 5: the third refutation goes to the operator, with no choice recorded.
     _verdict(one, one_path, REFUTED_REPLY)
     before = _snapshot(one)
     line = _ok(train_runner.route_unit(one, "U1", "REFUTED"))
-    assert line == ["route U1: operator model=opus refutations=3 checks=0"]
+    assert line == ["route U1: operator model=sonnet refutations=3 checks=0"]
     after = _snapshot(one)
     state = f".claude/daedalus/trains/{TRAIN}.json"
     assert {k for k in before if before[k] != after[k]} == {state}
     unit = train_state.units(train_state.load(one, TRAIN))[0]
-    assert len(unit["refutations"]) == 3 and len(unit["coders"]) == 2  # type: ignore[arg-type]
+    assert len(unit["refutations"]) == 3 and len(unit["coders"]) == 1  # type: ignore[arg-type]
 
 
 @pytest.mark.usefixtures("fixed")
 def test_route_of_a_red_rows_file_records_a_fix_pass_and_no_refutation(tmp_path: Path) -> None:
     seq, one, _, _ = _routed_pair(tmp_path)
-    _ok(train_runner.coder_model(seq, "U1"))
+    _ok(train_runner.unit_model(seq, "coder", "U1"))
     chose = "a fix pass by unit U1's own coder on 2 failing rows"
     cost = "one warm fix pass before any verifier turn"
     _ok(train_runner.choice(seq, chose, "a verifier dispatch", cost))
     line = _ok(train_runner.route_unit(one, "U1", "REFUTED", rows=2))
-    assert line == ["route U1: fix model=opus refutations=0 checks=0"]
+    assert line == ["route U1: fix model=sonnet refutations=0 checks=0"]
     assert _snapshot(seq) == _snapshot(one)
     assert train_state.units(train_state.load(one, TRAIN))[0].get("refutations") is None
 

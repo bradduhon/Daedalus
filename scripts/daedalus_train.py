@@ -27,12 +27,12 @@ from lib.train_runner import (  # noqa: E402
     EXIT_OK,
     EXIT_ROUTED,
     EXIT_STOP,
+    UNIT_AGENTS,
     Outcome,
     RunnerError,
     _unit_record,
     check_reply,
     choice,
-    coder_model,
     contract,
     dispatch_unit,
     finish_unit,
@@ -52,6 +52,7 @@ from lib.train_runner import (  # noqa: E402
     step,
     stop,
     summary,
+    unit_model,
 )
 from lib.train_state import TrainStateError, active_train  # noqa: E402
 from lib.train_state import load as load_state  # noqa: E402
@@ -132,10 +133,10 @@ def _parser() -> argparse.ArgumentParser:
     model.add_argument("--repo", type=Path, required=True)
     model.add_argument("--agent", required=True)
     model.add_argument("--override")
-    # 0187, 0245: --unit picks the coder's model from models.coder, plugin_file_coder or
-    # coder_after_rejection, and records it on the unit; models.agents is the fallback.
+    # 0267: --unit picks a coder's or a verifier's model from the unit's class; the coder's is
+    # recorded on the unit.
     model.add_argument("--unit")
-    # issue 187: one REFUTED verifier reply recorded on the unit the model command reads.
+    # issue 187: one REFUTED verifier reply recorded on the unit.
     refute = sub.add_parser("refuted")
     refute.add_argument("--repo", type=Path, required=True)
     refute.add_argument("--unit", required=True)
@@ -411,15 +412,16 @@ def _writer_clear(repo: Path) -> Outcome:
 
 def _model(repo: Path, agent: str, override: str | None, unit: str | None = None) -> Outcome:
     if unit is not None:
-        if agent != "coder" or override is not None:
+        if agent not in UNIT_AGENTS or override is not None:
             return Outcome(
                 EXIT_STOP,
                 [
-                    "model --unit picks a coder's model and takes no --override. "
-                    "Next: rerun it as model --agent coder --unit <unit id>."
+                    "model --unit picks a coder's or a verifier's model from the unit's class "
+                    "and takes no --override. Next: rerun it as model --agent coder --unit "
+                    "<unit id> or model --agent verifier --unit <unit id>."
                 ],
             )
-        return coder_model(repo, unit)
+        return unit_model(repo, agent, unit)
     try:
         return Outcome(EXIT_OK, [resolve(agent, load_config(cwd=str(repo)), override, repo=repo)])
     except (AgentModelError, ConfigError, DataDirError) as exc:

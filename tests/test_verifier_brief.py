@@ -449,8 +449,9 @@ def test_the_verify_step_asks_the_operator_each_check_and_never_fetches_the_site
         "`local_testing.instructions` text",
         "`Fail` is a refuted `code` row routed like a verifier refutation",
         "`Skip` records the operator's reason.",
-        # L1: the second and third steps live in the REFUTED bullet below this one.
-        "the second and third take the steps of the `[VERDICT: REFUTED]` bullet below.",
+        # L1, 0267: the third step lives in the REFUTED bullet below this one.
+        "the first and the second go back to that unit's warm coder as a `FIX.` message",
+        "the third takes the steps of the `[VERDICT: REFUTED]` bullet below.",
         "`operator check | <url or none> | <check text> | <pass, fail or skip> | <the "
         "operator's words>`",
         "Daedalus never starts, polls or fetches the site; the operator hosts it.",
@@ -463,31 +464,32 @@ def test_the_verify_step_asks_the_operator_each_check_and_never_fetches_the_site
     assert "Each operator check of the unit has an `operator check` evidence row" in evidence
 
 
-def test_the_second_refutation_escalates_and_the_third_reaches_the_operator() -> None:
-    # 0187, issue 115: a fresh coder on the escalated model takes the second refutation.
+def test_the_second_refutation_stays_warm_and_the_third_reaches_the_operator() -> None:
+    # 0267: the second refutation is a fix pass by the unit's own coder on the unit's model.
     text = flatten(VERIFY_SKILL.read_text(encoding="utf-8"))
     nxt = text.split("## Suggested next", 1)[1]
     assert (
-        "the first time on its own for one fix pass, the second time by a fresh coder on the "
-        "escalated model, a third time on the operator's Fix it now pick (step 5)." in nxt
+        "the first and the second time on its own coder for one fix pass each, on the unit's own "
+        "model, a third time on the operator's Fix it now pick (step 5)." in nxt
     )
 
 
-def test_the_catalog_and_build_skill_send_the_second_refutation_to_a_fresh_coder() -> None:
-    # Issue 256, 0187: the catalog row says what the build skill does; no stop on the second.
+def test_the_catalog_and_build_skill_send_the_second_refutation_to_the_same_coder() -> None:
+    # Issue 256, 0267: the catalog row says what the build skill does; no stop on the second.
     rules = flatten(CATALOG.read_text(encoding="utf-8")).split("## Composition rules", 1)[1]
     rule = rules.split("- Verifier step (spec 5): ", 1)[1].split(" - ", 1)[0]
     assert (
-        "a second REFUTED on the same unit goes to a fresh coder on the escalated model and the"
-        " run goes on (0187); a third goes to the operator." in rule
+        "a second REFUTED on the same unit sends the same coder one more FIX pass on the unit's "
+        "own model (0267); a third goes to the operator." in rule
     )
     assert "stops the train" not in rule
     build = flatten((REPO_ROOT / "skills" / "build" / "SKILL.md").read_text(encoding="utf-8"))
-    step5 = build.split("A second refutation (0187, issue 115).", 1)[1].split(" 6. ", 1)[0]
+    step5 = build.split("A second refutation (0267).", 1)[1].split(" 6. ", 1)[0]
     assert (
-        "When the verifier refutes the same unit a second time, the unit goes to a fresh coder"
-        " and the run goes on." in step5
+        "The verify phase sends a unit's first and second refutations back to its own warm coder"
+        " for one fix pass each, on the unit's own model." in step5
     )
+    assert "fresh coder" not in step5 and "escalated" not in step5
 
 
 def test_refuted_jail_forms_become_corpus_rows_in_every_routing_place() -> None:

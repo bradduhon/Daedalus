@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0187: each REFUTED verifier reply counts once on its unit; the second frees the unit.
+# 0187: each REFUTED verifier reply counts once on its unit; 0267: none changes its model.
 from __future__ import annotations
 
 from functools import partial
@@ -9,10 +9,9 @@ from typing import Any
 
 import pytest
 from lib import jail, train_runner, train_state, unit_binding, workspace
-from lib.config import Config
 
 from tests.conftest import CFG, CWD, REPO_ROOT, append_handback
-from tests.hook_chain import decide, judge
+from tests.hook_chain import decide
 from tests.payloads import _b
 from tests.test_train_runner import (
     SESSION,
@@ -65,7 +64,7 @@ def _unit(repo: Path, name: str) -> dict[str, Any]:
     return next(u for u in train_state.units(_state(repo)) if u["name"] == name)
 
 
-def test_two_refutations_in_one_window_escalate_and_free_the_unit(
+def test_two_refutations_in_one_window_keep_the_unit_its_coder_and_its_model(
     repo: Path,  # noqa: F811
     plugin: Path,  # noqa: F811
 ) -> None:
@@ -73,7 +72,8 @@ def test_two_refutations_in_one_window_escalate_and_free_the_unit(
     name = f"{train}-u1"
     assert unit_binding.record_dispatch(repo, train, name) is None
     assert unit_binding.claim(repo, train, "agent-sonnet", name) is None
-    assert train_runner.coder_model(repo, "U1").lines[0] == "sonnet"
+    first = train_runner.unit_model(repo, "coder", "U1")
+    assert first.lines == ["sonnet", "coder U1: sonnet | class: Plumbing"]
     _verifier_dispatch(repo, unit)
     _agent_stop(repo, "verifier", keyed(REFUTED_REPLY, unit))
     assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 1"]
@@ -83,25 +83,12 @@ def test_two_refutations_in_one_window_escalate_and_free_the_unit(
     append_handback(maker, keyed(REFUTED_REPLY, unit), "daedalus:verifier")
     _agent_stop(repo, "verifier", keyed(DIGEST, unit))
     assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 2"]
-    records = workspace._audit_records(repo, _state(repo))
-    assert workspace.unit_refutations(records, unit) < 2
-    second = train_runner.coder_model(repo, "U1")
-    assert second.lines == ["opus", "coder U1: opus (second refutation)"]
-    freed = {"agent_id": None, "released": True, "retired": ["agent-sonnet"]}
-    assert unit_binding._read(unit_binding.bindings_path(repo, train))[name] == freed
-    # 0187: a main-session cold coder dispatch warns and records nothing, so the coder's
-    # first write binds the still released unit.
-    prompt = f"The verifier refuted this unit twice.\nWorktree: {unit}\n"
-    tool_input = {"description": "unit", "prompt": prompt, "subagent_type": "daedalus:coder"}
-    dispatch = {"tool_name": "Agent", "tool_input": tool_input, "cwd": str(repo)}
-    warned = judge({**dispatch, "session_id": SESSION}, Config())
-    assert warned.warn and "did not print a dispatch of coder" in str(warned.record)
-    assert unit_binding._read(unit_binding.bindings_path(repo, train))[name] == freed
-    _ok(_write(repo, "agent-opus", unit / "u1.txt"))
-    _refused(_write(repo, "agent-sonnet", unit / "u1.txt"), "second refutation")
-    assert train_runner.coder_model(repo, "U1").lines == second.lines
-    bound = {"agent_id": "agent-opus", "retired": ["agent-sonnet"]}
+    # 0267: the second refutation changes neither the model nor the coder that holds the unit.
+    assert train_runner.unit_model(repo, "coder", "U1").lines == first.lines
+    bound = {"agent_id": "agent-sonnet"}
     assert unit_binding._read(unit_binding.bindings_path(repo, train))[name] == bound
+    _ok(_write(repo, "agent-sonnet", unit / "u1.txt"))
+    _refused(_write(repo, "agent-opus", unit / "u1.txt"), "belongs to coder agent-sonnet")
 
 
 def test_refuted_records_each_reply_once_and_refuses_one_not_refuted(
@@ -126,7 +113,7 @@ def test_refuted_records_each_reply_once_and_refuses_one_not_refuted(
     assert _unit(repo, f"{train}-u1")["refutations"] == [seq]
 
 
-def test_a_refuted_verdict_then_an_operator_check_fail_reach_the_escalated_tier(
+def test_a_refuted_verdict_then_an_operator_check_fail_keep_the_units_model(
     repo: Path,  # noqa: F811
     plugin: Path,  # noqa: F811
 ) -> None:
@@ -142,8 +129,8 @@ def test_a_refuted_verdict_then_an_operator_check_fail_reach_the_escalated_tier(
         assert (done.returncode, done.stdout) == (0, "refuted U1: 2\n"), done.stderr
     key = f"operator check after seq {verified}: Scene loads"
     assert _unit(repo, f"{train}-u1")["refutations"][1] == key
-    escalated = train_runner.coder_model(repo, "U1")
-    assert escalated.lines == ["opus", "coder U1: opus (second refutation)"]
+    kept = train_runner.unit_model(repo, "coder", "U1")
+    assert kept.lines == ["sonnet", "coder U1: sonnet | class: Plumbing"]
 
 
 def test_refuted_is_the_orchestrators_train_subcommand() -> None:

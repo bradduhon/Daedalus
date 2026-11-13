@@ -8,11 +8,11 @@ import hashlib
 from dataclasses import dataclass
 
 from lib.agent_models import MODELS
-from lib.coder_model import DEFAULT_CODER_MODELS
 from lib.config import (
     AUDIT_RETENTION_FLOOR_DAYS,
     CODER_KEYS,
     CONFIG_KEYS,
+    DEFAULT_CODER_MODELS,
     DEFAULT_MAX_CONCURRENT_BUILDERS,
     LIMIT_KEYS,
     MODEL_KEYS,
@@ -152,24 +152,19 @@ _CODER_TIER_TEXT = {
     "`scripts/checks/`, or one of the three jail files",
     "escalated": "the fresh coding agent that takes over a unit after its second failed check",
 }
-_CODER_AFFECTS = {
-    "default": "Coding agents run on this model for most work.",
-    "control_path": "Coding agents run on this model when a change touches the plugin's own "
-    "control files.",
-    "escalated": "A fresh coding agent runs on this model after a change fails its check twice.",
-}
 
 
 def _coder_row(key: str) -> KeyRow:
     tier = CODER_KEYS[key]
+    # 0267: the unit's class picks a coding agent's model in a run, so no reader is left.
     return KeyRow(
         f"The model a coding agent runs on for {_CODER_TIER_TEXT[tier]}",
         "string or null",
         f"{_MODEL_NAMES}, or `null`; any other value is refused",
         f'`null`: `"{DEFAULT_CODER_MODELS[tier]}"`',
         '`"opus"`',
-        _CODER_AFFECTS[tier],
-        ("scripts/lib/coder_model.py", "scripts/daedalus_train.py"),
+        f"{NOT_ACTIVE}: the class of each unit's work picks its coding agent's model.",
+        (),
         override=True,
     )
 
@@ -666,13 +661,15 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "The keys of the personal file, checked the same way; any other key is refused",
         "`{}`: the personal file's values stand",
         '`{"reading_level": "expert"}`',
-        f"{NOT_ACTIVE}: the personal values are checked and kept for later.",
-        (),
+        "Daedalus reads this project's copy of the Self-Assessment and Developer Profile "
+        "switches, the work classes and the class mapping, and checks and keeps the rest for "
+        "later.",
+        ("scripts/lib/config.py", "scripts/lib/operator_file.py"),
     ),
     (CONFIG_FILE, "models.agents"): KeyRow(
         "Which model each catalog agent runs on, in place of the `model:` line of its agent "
         "file; a model a skill is given for one run still comes first. Inside a run the coding "
-        "agent takes its model from the `models.coder` keys instead",
+        "agent and the verifier of a unit take their model from the unit's class instead",
         "object",
         f"Keys are agent names the catalog lists; values are {_MODEL_NAMES}; any other name or "
         "value is refused",
@@ -847,8 +844,9 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"`{PLUMBING}` and `{MECHANICAL}`; `[]` means no classes, so all work runs on "
         f'`"{MIDDLE_MODEL}"`',
         f'`[{{"name": "{PLUMBING}", "definition": "{dict(DEFAULT_CLASSES)[PLUMBING]}"}}]`',
-        f"{NOT_ACTIVE}: no run picks a model by the class of its work.",
-        (),
+        "Each unit of a run's plan names one of these classes, and the plan is refused when it "
+        "names another.",
+        ("scripts/validate_plan.py", "scripts/lib/plan_record.py", "scripts/lib/train_runner.py"),
     ),
     (OPERATOR_FILE_NAME, "class_models"): KeyRow(
         "Which model each class of work runs on; a class with no model here runs on "
@@ -861,8 +859,9 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f'Absent or `null`: the fourteen security classes on `"{TOP_MODEL}"`, `{PLUMBING}` on '
         f'`"{MIDDLE_MODEL}"` and `{MECHANICAL}` on `"{SMALLEST_MODEL}"`',
         f'`{{"{PLUMBING}": "{MIDDLE_MODEL}", "Tokens": "{TOP_MODEL}"}}`',
-        f"{NOT_ACTIVE}: every agent keeps the model it runs on today.",
-        (),
+        "In a run, the coding agent and the verifier of each unit run on the model its class "
+        "maps to.",
+        ("scripts/lib/work_classes.py", "scripts/lib/train_runner.py"),
     ),
 }
 
@@ -1191,8 +1190,19 @@ OVERLAPS: tuple[Overlap, ...] = (
         "operator",
         "A project's config can hold its own copy of any personal preference. A value set "
         "there replaces your personal value for that project only, and the rest still come "
-        "from your personal file. Nothing acts on those values yet.",
-        (("scripts/lib/operator_file.py", 226, "a key the override sets replaces the base value"),),
+        "from your personal file. Today Daedalus reads the project's copy of the "
+        "Self-Assessment and Developer Profile switches, the work classes and the class mapping; "
+        "nothing acts yet on the project's copy of any other value.",
+        (
+            (
+                "scripts/lib/operator_file.py",
+                226,
+                "a key the override sets replaces the base value",
+            ),
+            ("scripts/lib/train_runner.py", 1523, "operator = operator_file.load(repo)"),
+            ("scripts/lib/self_assessment.py", 49, "load(project_root(Path(path)))"),
+            ("scripts/lib/developer_profile.py", 51, "load(project_root(Path(repo_root)))"),
+        ),
         "config",
     ),
 )

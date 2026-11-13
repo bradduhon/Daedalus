@@ -28,13 +28,14 @@ from lib import (
     train_definition,
     train_state,
     unit_binding,
+    work_classes,
     workspace,
 )
-from lib import coder_model as coder_model_lib
-from lib.audit import ReplyKeyError, message_hmac, reply_key
+from lib.audit import DataDirError, ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
     R_BOTH_VERDICTS,
+    REFUTED_PREFIX,
     SUMMARY_DIR,
     TIP,
     VERDICT_APPROVED,
@@ -1512,36 +1513,50 @@ def _unit_record(state: dict[str, object], train_id: str, unit_id: str) -> dict[
     )
 
 
-def coder_model(cwd: Path, unit_id: str) -> Outcome:
-    # 0187, issue 115: the coder model of one unit dispatch, recorded on the unit with its reason.
+# 0267: the agents whose model the unit's class picks.
+UNIT_AGENTS = ("coder", "verifier")
+# 0161, 0133: the refutation count that takes a unit to the operator.
+OPERATOR_REFUTATION = 3
+_MODEL_SETTINGS_NEXT = (
+    "Next: correct the work_classes or class_models setting named above, then rerun model."
+)
+
+
+def unit_model(cwd: Path, agent: str, unit_id: str) -> Outcome:
+    # 0267, 0270: the unit's class and the mapping pick the model; the coder's is recorded.
     def edit(repo: Path, train_id: str) -> list[str]:
         try:
-            models = load_config(cwd=str(repo)).coder_models
+            operator = operator_file.load(repo)
+        except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
+            raise RunnerError(f"{exc}\n{_MODEL_SETTINGS_NEXT}") from exc
+        try:
             state = train_state.load(repo, train_id)
-            plan = workspace._recorded_plan(state)
-            records = workspace._audit_records(repo, state)
-        except (ConfigError, workspace.WorkspaceError) as exc:
+            if not train_state.record(state, train_state.PLAN):
+                raise RunnerError(
+                    f"run {train_id} records no plan, so unit {unit_id} has no class. Next: record "
+                    "the plan with daedalus_train.py plan --path, then rerun model."
+                )
+            _, planned = _planned(state, unit_id)
+        except workspace.WorkspaceError as exc:
             raise RunnerError(str(exc)) from exc
-        planned = next((u for u in plan.units if u.id.casefold() == unit_id.casefold()), None)
-        if planned is None:
+        name = planned.effective_class
+        if planned.work_class is not None and name not in {n for n, _ in operator.work_classes}:
             raise RunnerError(
-                f"the recorded plan names no unit {unit_id}. "
-                "Next: pass a unit id the recorded plan names."
+                f"unit {planned.id} names the class {name}, which the work classes settings no "
+                f"longer hold. Next: add {name} back to work_classes, or give unit {planned.id} "
+                "a class the settings hold and record the plan again."
             )
+        model = work_classes.model_for(name, operator)
+        reason = f" | class_reason: {planned.class_reason}" if planned.class_reason else ""
+        line = f"{agent} {planned.id}: {model} | class: {name}{reason}"
+        if agent != "coder":
+            return [model, line]
         unit = _unit_record(state, train_id, unit_id)
-        # issue 187: the recorded refutations count too, where one log window holds two replies.
-        counted = workspace.unit_refutations(records, Path(str(unit["path"])))
-        times = max(len(_refutation_seqs(unit)), counted)
-        tier, reason = coder_model_lib.coder_tier(planned.files, plan_record.CONTROL_PATHS, times)
-        entry: dict[str, object] = {"model": models[tier], "tier": tier, "reason": reason}
+        entry: dict[str, object] = {"model": model, "class": name}
         prior = _objects(unit, CODERS)
-        # 0187: a repeated call records nothing new and never frees the unit twice.
+        # 0187: a repeated call records nothing new.
         if prior and {k: prior[-1].get(k) for k in entry} == entry:
-            return [models[tier], _coder_line(unit_id, entry)]
-        if tier == coder_model_lib.ESCALATED:
-            why = unit_binding.release(repo, train_id, str(unit["name"]))
-            if why is not None:
-                raise RunnerError(why)
+            return [model, line]
 
         def add(state: dict[str, object]) -> None:
             raw = state.get("units")
@@ -1552,13 +1567,9 @@ def coder_model(cwd: Path, unit_id: str) -> Outcome:
             _reach_phase(state, "build")
 
         train_state.change(repo, train_id, add)
-        return [models[tier], _coder_line(unit_id, entry)]
+        return [model, line]
 
     return _recorded(cwd, edit)
-
-
-def _coder_line(unit_id: str, entry: dict[str, object]) -> str:
-    return f"coder {unit_id}: {entry['model']} ({entry['reason']})"
 
 
 REFUTATIONS = "refutations"
@@ -1603,10 +1614,10 @@ def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outco
                 f"the audit log holds no verifier reply on unit {unit_id} since its newest "
                 f"Unit worktree: dispatch. {_REFUTED_NEXT}"
             )
-        elif line is None or not line.startswith(coder_model_lib.REFUTED_PREFIX):
+        elif line is None or not line.startswith(REFUTED_PREFIX):
             raise RunnerError(
                 f"the newest verifier reply on unit {unit_id}, at seq {seq}, does not end "
-                f"with {coder_model_lib.REFUTED_PREFIX}, so no refutation is recorded. "
+                f"with {REFUTED_PREFIX}, so no refutation is recorded. "
                 f"{_REFUTED_NEXT}"
             )
         else:
@@ -1922,7 +1933,7 @@ def _unit_dispatch(repo: Path, train_id: str, unit_id: str, warm: str | None) ->
             f"unit {planned.id} is recorded, and its worktree {path} is gone, so it merged or "
             "was removed. Next: dispatch a unit that has not merged."
         )
-    model = _sub(coder_model(repo, planned.id))[0]
+    model = _sub(unit_model(repo, "coder", planned.id))[0]
     head = [*packets, f"Worktree: {path}"]
     if rows:
         packs = [*CODER_PACKS, *((SHELL_PACK,) if _hits(planned.files, SHELL_PACK_FILES) else ())]
@@ -2046,19 +2057,15 @@ def _route_lines(
         over, cost = "a verifier dispatch", "one warm fix pass before any verifier turn"
     else:
         count = int(_sub(refuted(repo, planned.id))[0].rsplit(": ", 1)[1])
-        route = {1: "fix", 2: "fresh"}.get(count, "operator")
-        if route == "fix":
-            chose = f"a fix pass by unit {planned.id}'s own coder"
-            over, cost = "a fresh coder", "one warm fix pass; the coder keeps its context"
-        else:
-            chose = f"a fresh coder on the escalated model for unit {planned.id}"
-            over = "another fix pass by its own coder"
-            cost = "the fresh coder reads the brief, the unit's commits and the verifier's rows"
-    # verify step 5: a third refutation is the operator's; no choice, no model record, no release.
+        # 0267: the first and second refutations alike go back warm on the unit's own model.
+        route = "fix" if count < OPERATOR_REFUTATION else "operator"
+        chose = f"a fix pass by unit {planned.id}'s own coder"
+        over, cost = "a fresh coder", "one warm fix pass; the coder keeps its context"
+    # verify step 5: a third refutation is the operator's; no choice, no model record.
     if route == "operator":
         model = _last_model(_unit_record(train_state.load(repo, train_id), train_id, planned.id))
     else:
-        model = _sub(coder_model(repo, planned.id))[0]
+        model = _sub(unit_model(repo, "coder", planned.id))[0]
         _sub(choice(repo, chose, over, cost))
     return [f"route {planned.id}: {route} model={model} refutations={count} checks=0"]
 
@@ -2391,10 +2398,10 @@ def _refuted_reply(
             "Unit worktree: dispatch. Next: run exception --unit only on a unit whose newest "
             "verifier reply is [VERDICT: REFUTED]."
         )
-    if not line.startswith(coder_model_lib.REFUTED_PREFIX):
+    if not line.startswith(REFUTED_PREFIX):
         raise RunnerError(
             f"the newest verifier verdict on unit {unit_id}, at seq {seq}, is not "
-            f"{coder_model_lib.REFUTED_PREFIX}, so it has no row to exempt. Next: merge the "
+            f"{REFUTED_PREFIX}, so it has no row to exempt. Next: merge the "
             "unit if it is verified, or send it to the verifier again."
         )
     rows = workspace.refuted_rows(line)

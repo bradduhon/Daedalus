@@ -130,9 +130,8 @@ def _judge_next(agent: str) -> str:
 def findings_problem(agent: str, reply: str, listed: tuple[int, int] | None = None) -> str | None:
     # 0281: a failing verdict whose finding lacks its rule, a place or its search is refused;
     # listed is the (round, count) of the round's findings file, None when it cannot be read.
-    from lib.audit_proof import VERDICT_REJECTED
+    from lib.audit_proof import REFUTED_PREFIX, VERDICT_REJECTED
     from lib.audit_rounds import cell_problems, reply_finding
-    from lib.coder_model import REFUTED_PREFIX
     from lib.workspace import refuted_rows
 
     lines = [line.strip() for line in reply.splitlines() if line.strip()]

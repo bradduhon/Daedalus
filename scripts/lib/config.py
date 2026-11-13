@@ -12,7 +12,6 @@ from pathlib import Path
 from lib import git
 from lib.agent_models import MODELS
 from lib.audit import check_project_data_dir
-from lib.coder_model import DEFAULT_CODER_MODELS
 from lib.credential_paths import credential_roots
 from lib.operator_file import OperatorError, validate
 from lib.project_root import in_git_work_tree
@@ -49,12 +48,13 @@ MODEL_KEYS = (
     "coder_after_rejection",
     "fable_available",
 )
-# 0245: each coder model key and the coder tier it sets.
+# 0245: each coder model key and the coder tier it sets; 0267: no run reads them, the class does.
 CODER_KEYS = {
     "coder": "default",
     "plugin_file_coder": "control_path",
     "coder_after_rejection": "escalated",
 }
+DEFAULT_CODER_MODELS = {"default": "sonnet", "control_path": "opus", "escalated": "opus"}
 LIMIT_KEYS = ("parallel_coders", "task_tokens", "log_retention_days")
 # 0245: a coding rules entry's one key and the standards source kind it names.
 RULE_SOURCE_KEYS = {"folder": "rules-dir", "file": "file", "builtin": "pack"}
@@ -104,7 +104,7 @@ class Config:
     wrapper_read_roots: tuple[str, ...] = field(default_factory=tuple)
     # 0209: total tokens per unit, coders plus verifiers; None leaves the gate off.
     unit_token_budget: int | None = None
-    # 0187: the coder's model per tier, passed per dispatch; agent_models stays the fallback.
+    # 0245: the coder model keys as read; 0267: a run takes a unit's model from its class instead.
     coder_models: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CODER_MODELS))
     # 0217: true or false settles Fable for the preferring agents; None leaves it to the session.
     fable_available: bool | None = None

@@ -27,8 +27,7 @@ from lib import (
     writer_mode,
 )
 from lib.audit import SESSION_ID, DataDirError, cache_dir_or_probe, ensure_project_data_dir
-from lib.audit_proof import SUMMARY_DIR
-from lib.coder_model import REFUTED_PREFIX
+from lib.audit_proof import REFUTED_PREFIX, SUMMARY_DIR
 from lib.config import Config, ConfigError, load_config
 from lib.ledger import LedgerError, probe_line, read_sequence, resolve_ledger
 from lib.train_state import TRAIN_ID as _TRAIN_ID
