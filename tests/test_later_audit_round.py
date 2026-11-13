@@ -195,6 +195,19 @@ def test_the_auditor_file_carries_the_later_round_rule_in_four_sentences() -> No
         assert part in rule, part
 
 
+def test_the_auditor_file_never_says_a_later_round_judges_the_full_diff() -> None:
+    flat = " ".join((REPO_ROOT / "agents" / "auditor.md").read_text(encoding="utf-8").split())
+    for gone in (
+        "Every round judges the full diff",
+        "a later round starts at the delta since your last round",
+        "never stops there",
+        "A later round after a fix takes the full procedure.",
+    ):
+        assert gone not in flat, gone
+    assert "Round 1 judges the full diff from `<diff base>`" in flat
+    assert "a dispatch that carries a `Range:` line reads that range and its `Place:`" in flat
+
+
 def test_every_later_audit_round_is_a_new_auditor_never_a_resume() -> None:
     audit = " ".join((REPO_ROOT / "skills" / "audit" / "SKILL.md").read_text().split())
     step = audit.split("5. Choose the auditor's model", 1)[1].split("### Short form", 1)[0]

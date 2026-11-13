@@ -103,7 +103,8 @@ removed lines (step 1), the fixed class commands of step 2, scope (step 4) and c
 file and the three cells (Finding format items 1 to 4 and 6), and both verdict lines. Skip the
 rank by readers, the reachable scope with its `Reachable:` and `Hunt:` lines, and the
 adversarial corpus run (Finding format item 5); a small change touches no jail check file. The
-short form is one round, round 1. A later round after a fix takes the full procedure.
+short form is one round, round 1. A later round after a fix takes the full procedure on the
+range and places its dispatch names (Later round).
 
 ## Table-diff form (0232)
 When the dispatch carries a `Form: table diff` line, run
@@ -146,9 +147,9 @@ Work through every step for every branch.
    `Over size:` asset file is judged by its name, never its content. A file with a source
    ending is never excluded, so it is in the diff. Each `Asset root source:` line names a
    source file under an asset root: judge its change as usual, and file it as a finding,
-   because an asset root is no place for source. Every round judges the full diff
-   from `<diff base>`; a later round starts at the delta since your last round and never stops
-   there.
+   because an asset root is no place for source. Round 1 judges the full diff
+   from `<diff base>`; a dispatch that carries a `Range:` line reads that range and its `Place:`
+   lines and nothing else (Later round).
    **Reachable scope**: scope is the diff plus what it makes reachable. For each new file,
    flag, subcommand, input source or agent instruction, list the older rules and enforcement
    points it feeds or relies on, each `Reachable:` line included, and judge each at `<tip>` in

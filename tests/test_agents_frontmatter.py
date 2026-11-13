@@ -591,7 +591,7 @@ def test_auditor_judges_what_a_change_makes_reachable() -> None:
     for phrase in (
         "Trust model: attacker input is anything a coder can commit",
         "scope is the diff plus what it makes reachable",
-        "Every round judges the full diff from `<diff base>`",
+        "Round 1 judges the full diff from `<diff base>`",
         "reading alone never closes it",
         "never a real key",
         "`[STATUS: YIELD_WEB] <tool> options and config files`",
@@ -631,7 +631,8 @@ def test_auditor_short_form_measures_first_and_keeps_the_gate() -> None:
         "and both verdict lines",
         "Skip the rank by readers, the reachable scope with its `Reachable:` and `Hunt:` lines, "
         "and the adversarial corpus run",
-        "A later round after a fix takes the full procedure.",
+        "A later round after a fix takes the full procedure on the range and places its "
+        "dispatch names (Later round).",
     ):
         assert phrase in short, phrase
     assert text.index("## Short form (0166, 0175)") < text.index("## Procedure")
