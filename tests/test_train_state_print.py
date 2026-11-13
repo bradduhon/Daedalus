@@ -158,7 +158,7 @@ def test_summary_heading_says_run(tmp_path: Path) -> None:
 
 def test_header_lines_come_from_state_and_the_notes(tmp_path: Path) -> None:
     lines = _text(tmp_path).splitlines()
-    assert lines[:9] == [
+    assert lines[:10] == [
         f"# Run {TRAIN}",
         "Task: build the summary command",
         f"Base: main @ {'a' * 40}. Integration branch: daedalus/{TRAIN}.",
@@ -168,6 +168,9 @@ def test_header_lines_come_from_state_and_the_notes(tmp_path: Path) -> None:
         "Contract: private/specs/plan-8.md v3",
         f"Ledger ids: 0127-DAE-PLT,0128-DAE-PLT in commit {'c' * 40}.",
         "[POLICY: none declared]",
+        # 0276: a state written before the record existed names no orchestrating model.
+        "Orchestrating model: unknown (the run began before the orchestrating model was "
+        "recorded) | at a judgement call: asks",
         "## Rulings",
     ]
     assert "[POLICY: declared, gate not yet shipped]" in _text(tmp_path, policy=True)

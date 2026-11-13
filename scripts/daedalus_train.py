@@ -41,6 +41,7 @@ from lib.train_runner import (  # noqa: E402
     dispatch_unit,
     finish_unit,
     fix_unit,
+    orchestrating_read,
     progress,
     reaudit,
     record_docs_verdict,
@@ -60,8 +61,10 @@ from lib.train_runner import (  # noqa: E402
     summary,
     unit_model,
 )
-from lib.train_state import TrainStateError, active_train  # noqa: E402
+from lib.train_state import BY_AGENT, BY_SESSION, TrainStateError, active_train  # noqa: E402
 from lib.train_state import load as load_state  # noqa: E402
+
+ORCHESTRATORS = (BY_SESSION, BY_AGENT)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -78,6 +81,8 @@ def _parser() -> argparse.ArgumentParser:
     begin.add_argument("--repo", type=Path, required=True)
     begin.add_argument("--train", required=True)
     begin.add_argument("--output")
+    # 0276: who orchestrates the run; the session's model is never guessed, so it records unknown.
+    begin.add_argument("--orchestrator", choices=ORCHESTRATORS, default=BY_SESSION)
     # pin D1 -> D6: reaudit and resume run from the main session; ledger from the orchestrator.
     # W3.2: summary writes <train-id>-summary.md from train state and the audit logs.
     # 0156: contract prints `contract: skip` or `contract: required (<reason>)`.
@@ -137,7 +142,9 @@ def _parser() -> argparse.ArgumentParser:
     # spec 4, pin C3 -> C5: the effective model of one catalog agent, inside or outside a train.
     model = sub.add_parser("model")
     model.add_argument("--repo", type=Path, required=True)
-    model.add_argument("--agent", required=True)
+    model.add_argument("--agent")
+    # 0276: the run's orchestrating model and decides or asks, in place of --agent.
+    model.add_argument("--orchestrating", action="store_true")
     model.add_argument("--override")
     # 0267: --unit picks a coder's or a verifier's model from the unit's class; the coder's is
     # recorded on the unit.
@@ -444,11 +451,22 @@ def _writer_clear(repo: Path) -> Outcome:
 
 def _model(
     repo: Path,
-    agent: str,
+    agent: str | None,
     override: str | None,
     unit: str | None = None,
     class_check: bool = False,
+    orchestrating: bool = False,
 ) -> Outcome:
+    if orchestrating or agent is None:
+        if not orchestrating or agent is not None or unit or override or class_check:
+            return Outcome(
+                EXIT_STOP,
+                [
+                    "model takes either --agent <name> or --orchestrating alone. Next: rerun it "
+                    "as model --agent <name>, or as model --orchestrating for the run's record."
+                ],
+            )
+        return orchestrating_read(repo)
     if class_check:
         if agent != AUDITOR_AGENT or unit is not None or override is not None:
             return Outcome(
@@ -501,7 +519,7 @@ def _fix(args: argparse.Namespace) -> FixUnit:
 def _dispatch(args: argparse.Namespace) -> Outcome:
     repo = args.repo.resolve()
     if args.action == "start":
-        return start(repo, args.train, args.output)
+        return start(repo, args.train, args.output, orchestrator=args.orchestrator)
     if args.action == "step":
         return step(repo)
     if args.action == "progress":
@@ -585,7 +603,9 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "summary":
         return summary(repo)
     if args.action == "model":
-        return _model(repo, args.agent, args.override, args.unit, args.class_check)
+        return _model(
+            repo, args.agent, args.override, args.unit, args.class_check, args.orchestrating
+        )
     if args.action == "refuted":
         return refuted(repo, args.unit, args.operator_check)
     if args.action == "brief-check":
