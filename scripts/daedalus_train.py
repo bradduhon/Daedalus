@@ -5,12 +5,17 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import contextlib
+import io
 import os
 import re
+import string
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import daedalus_map  # noqa: E402
 from lib import assets, git, packs, provider_mirror, tf_validate, writer_mode  # noqa: E402
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
@@ -41,6 +46,7 @@ from lib.train_runner import (  # noqa: E402
     dispatch_unit,
     finish_unit,
     fix_unit,
+    open_run,
     progress,
     reaudit,
     record_docs_verdict,
@@ -69,7 +75,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
         "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch, route, "
-        "finish-unit, fix-unit, providers, validate. "
+        "finish-unit, fix-unit, providers, validate, open. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -174,6 +180,9 @@ def _parser() -> argparse.ArgumentParser:
     tail.add_argument("--tip", required=True)
     # 0278: a verifier dispatch's unit; a round after a refutation adds its Range and Place lines.
     tail.add_argument("--unit")
+    # 253: the verifier dispatch's map check, and the audit's reachability sites, in this call.
+    tail.add_argument("--map", dest="map_check", action="store_true")
+    tail.add_argument("--reach", action="append", default=[])
     # 233: the main session's sealed one-time pass; the command text comes from a file only.
     grant = sub.add_parser("grant")
     grant.add_argument("--repo", type=Path, required=True)
@@ -224,6 +233,10 @@ def _parser() -> argparse.ArgumentParser:
     check_tf.add_argument("--unit")
     # 0265: the run's integration tip, before the auditor is dispatched.
     check_tf.add_argument("--merged", action="store_true")
+    # 0230, 253: the run-open records in one call; main session only, as begin is.
+    opened = sub.add_parser("open", allow_abbrev=False)
+    opened.add_argument("--repo", type=Path, required=True)
+    opened.add_argument("--mode", choices=("main", "unattended"), required=True)
     return parser
 
 
@@ -409,7 +422,123 @@ def _ask_check(question: Path, brief: Path | None) -> Outcome:
     return Outcome(EXIT_STOP, lines)
 
 
-def _assets(repo: Path, base: str, tip: str, unit: str | None = None) -> Outcome:
+def _map_check(repo: Path) -> Outcome:
+    # 253: verify step 2's map check, on the run's own map folder and the plan the run recorded.
+    root = project_root(repo).resolve()
+    train = active_train(root)
+    if train is None:
+        return Outcome(
+            EXIT_STOP,
+            [
+                f"assets --map checks a run's map, and no run is marked in {root}. Next: rerun "
+                "assets without --map, since only a marked run has a map folder."
+            ],
+        )
+    out = root / daedalus_map.SCRATCH / train / "map"
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        code = daedalus_map.main(["--repo", str(root), "--out", str(out), "--check"])
+    return Outcome(EXIT_OK if code == 0 else EXIT_STOP, printed.getvalue().splitlines())
+
+
+# 253: a --reach value is a name, flag or file stem; the limit keeps the auditor's dispatch short.
+REACH_CHARS = frozenset(string.ascii_letters + string.digits + "_-.")
+REACH_MAX, REACH_SITES = 80, 40
+R_REACH_NAME = (
+    "assets --reach {name!r} is not one name of at most {limit} letters, digits, `_`, `-` and "
+    "`.`. Next: rerun assets with one --reach per name the merged diff adds."
+)
+
+
+def _scope(text: str | None, path: str, line: int) -> str:
+    # 253: the innermost def or class holding the site; a file that is not Python reads as text.
+    if text is None or not path.endswith(".py"):
+        return "text"
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return "text"
+    kinds = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    holders = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, kinds) and n.lineno <= line <= (n.end_lineno or n.lineno)
+    ]
+    if not holders:
+        return "module level"
+    inner = max(holders, key=lambda n: n.lineno)
+    return f"{'class' if isinstance(inner, ast.ClassDef) else 'def'} {inner.name}"
+
+
+def _reach(repo: Path, tip: str, names: list[str]) -> Outcome:
+    # 253: audit step 4's Reachable lines, one per site outside the tests at the merged tip.
+    for name in names:
+        if not name or len(name) > REACH_MAX or not set(name) <= REACH_CHARS or not name.strip("-"):
+            return Outcome(EXIT_STOP, [R_REACH_NAME.format(name=name, limit=REACH_MAX)])
+    no_tip = Outcome(
+        EXIT_STOP, [f"assets --tip {tip!r} names no commit. Next: rerun assets with the run's tip."]
+    )
+    if tip.startswith("-"):
+        return no_tip
+    try:
+        found = git.run(["rev-parse", "--verify", "--quiet", f"{tip}^{{commit}}"], repo)
+        sha = found.stdout.strip()
+        if found.returncode != 0 or not sha:
+            return no_tip
+        lines: list[str] = []
+        texts: dict[str, str | None] = {}
+        for name in names:
+            hits = git.run(["grep", "-n", "-z", "-w", "-F", "-I", "-e", name, sha, "--"], repo)
+            if hits.returncode not in (0, 1):
+                return Outcome(
+                    EXIT_STOP,
+                    [
+                        f"assets: git grep failed ({hits.stderr.strip()}). Next: check that git "
+                        "can read the repository, then rerun assets."
+                    ],
+                )
+            sites: list[tuple[str, int]] = []
+            # 253: -z ends the path and the line number with NUL; only the newline ends a row.
+            for row in hits.stdout.split("\n"):
+                parts = row.split("\0", 2)
+                if len(parts) < 3 or not parts[1].isdigit():
+                    continue
+                path = parts[0].removeprefix(f"{sha}:")
+                if not daedalus_map._is_test(path):
+                    sites.append((path, int(parts[1])))
+            for path, number in sites[:REACH_SITES]:
+                if path not in texts:
+                    blob = git.run(["cat-file", "blob", f"{sha}:{path}"], repo)
+                    texts[path] = blob.stdout if blob.returncode == 0 else None
+                scope = _scope(texts[path], path, number)
+                lines.append(f"Reachable: {name} -> {scope} {path}:{number}")
+            if len(sites) > REACH_SITES:
+                more = len(sites) - REACH_SITES
+                lines.append(f"Reachable: {name} -> {more} more sites; pass a narrower name")
+            if not sites:
+                lines.append(f"Reachable: {name} -> no site outside the tests at {sha[:12]}")
+    except (GitTimeout, OSError, UnicodeDecodeError) as exc:
+        return Outcome(EXIT_STOP, [f"assets: {exc}. Next: rerun assets once git answers."])
+    return Outcome(EXIT_OK, lines)
+
+
+def _assets(
+    repo: Path,
+    base: str,
+    tip: str,
+    unit: str | None = None,
+    map_check: bool = False,
+    reach: list[str] | None = None,
+) -> Outcome:
+    names = reach or []
+    if (map_check and unit is None) or (names and unit is not None):
+        return Outcome(
+            EXIT_STOP,
+            [
+                "assets --map goes with --unit, a verifier dispatch, and --reach goes without it, "
+                "the audit's merged range. Next: rerun assets with one of those forms."
+            ],
+        )
     later = round_lines(repo, unit, tip) if unit is not None else Outcome(EXIT_OK, [])
     if later.code != EXIT_OK:
         return later
@@ -419,7 +548,14 @@ def _assets(repo: Path, base: str, tip: str, unit: str | None = None) -> Outcome
         found = assets.exclusion(repo, base, tip, declared)
     except (ManifestError, assets.AssetsError, GitTimeout, OSError) as exc:
         return Outcome(EXIT_STOP, [f"assets: {exc}"])
-    return Outcome(EXIT_OK, [*assets.lines(found), *later.lines])
+    sites = _reach(repo, tip, names) if names else Outcome(EXIT_OK, [])
+    if sites.code != EXIT_OK:
+        return sites
+    # 253: every read above runs first, so a refusal leaves the map as it was.
+    mapped = _map_check(repo) if map_check else Outcome(EXIT_OK, [])
+    if mapped.code != EXIT_OK:
+        return mapped
+    return Outcome(EXIT_OK, [*mapped.lines, *assets.lines(found), *later.lines, *sites.lines])
 
 
 def _writer_clear(repo: Path) -> Outcome:
@@ -593,7 +729,9 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "writer-clear":
         return _writer_clear(repo)
     if args.action == "assets":
-        return _assets(repo, args.base, args.tip, args.unit)
+        return _assets(repo, args.base, args.tip, args.unit, args.map_check, args.reach)
+    if args.action == "open":
+        return open_run(repo, args.mode)
     if args.action == "grant":
         return _grant(repo, args)
     if args.action == "dispatch":

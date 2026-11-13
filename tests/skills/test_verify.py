@@ -20,7 +20,9 @@ def test_verify_skill_runs_rows_mode_before_the_coder() -> None:
         "once per unit of the build-only-the-ask class",
         "before its coder is dispatched",
         "A unit outside the class skips it.",
-        "Run the model command for the verifier as unit mode does (step 4).",
+        "Run no model command: pass the `model=<word>` of the build phase's dispatch line as"
+        " `model:`",
+        "with the rows-mode lines that dispatch call printed after its line, pasted unchanged:",
         "the first line `ROWS MODE.`",
         "the line `Unit worktree: <unit worktree path>`",
         "the line `Brief: <brief path>`",

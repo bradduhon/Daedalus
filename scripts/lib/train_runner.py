@@ -32,6 +32,7 @@ from lib import (
     work_classes,
     workspace,
 )
+from lib.agent_models import AgentModelError, resolve
 from lib.audit import DataDirError, ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
@@ -2535,6 +2536,65 @@ def dispatch_unit(
             raise RunnerError(str(exc)) from exc
 
     return _with_next(_recorded(cwd, edit), "dispatch")
+
+
+# 253: the run skill's agent choice per mode, recorded word for word by the open call.
+OPEN_MODES: dict[str, tuple[str, str, str]] = {
+    "main": (
+        "the main session runs the phases",
+        "an orchestrator agent runs them",
+        "one context the operator can resume; no second coordinator context",
+    ),
+    "unattended": (
+        "one orchestrator agent runs the phases",
+        "the main session runs every phase",
+        "one agent context; the session keeps only the relay",
+    ),
+}
+UNATTENDED, ORCHESTRATOR_AGENT = "unattended", "orchestrator"
+
+
+def _unopen(repo: Path, train_id: str, cause: str) -> str:
+    # 253: a refused open leaves no run behind, as a refused begin leaves none.
+    try:
+        state = train_state.load(repo, train_id)
+    except train_state.TrainStateError:
+        state = {}
+    try:
+        workspace.clear_train(repo)
+        train_state.state_path(repo, train_id).unlink(missing_ok=True)
+    except (workspace.WorkspaceError, OSError) as exc:
+        return f"The run {train_id} could not be removed ({exc}) after this refusal: {cause}"
+    charter, base = _text(state, "charter_root"), _text(state, "charter_base")
+    if charter and base:
+        return str(workspace._undo_charter(Path(charter), base, RunnerError(cause)))
+    return cause
+
+
+def open_run(cwd: Path, mode: str) -> Outcome:
+    # 0230, 253: begin, the agent choice and, unattended, the orchestrator's model in one call.
+    if mode not in OPEN_MODES:
+        return Outcome(
+            EXIT_STOP,
+            [
+                f"--mode {mode!r} is not main or unattended. Next: rerun open with --mode main, "
+                "or with --mode unattended after the word unattended."
+            ],
+        )
+    try:
+        lines = workspace.begin(cwd)
+    except workspace.WorkspaceError as exc:
+        return _with_next(Outcome(EXIT_STOP, [str(exc)]), "open")
+    repo = workspace.repo_root(cwd.resolve())
+    train_id = train_state.active_train(repo) or lines[0].split()[1]
+    try:
+        lines += _sub(choice(repo, *OPEN_MODES[mode]))
+        if mode == UNATTENDED:
+            config = load_config(cwd=str(repo))
+            lines.append(resolve(ORCHESTRATOR_AGENT, config, None, repo=repo))
+    except (RunnerError, AgentModelError, ConfigError, DataDirError) as exc:
+        return _with_next(Outcome(EXIT_STOP, [_unopen(repo, train_id, str(exc))]), "open")
+    return Outcome(EXIT_OK, lines)
 
 
 def _operator_checks(repo: Path, planned: plan_record.Unit) -> list[str]:
