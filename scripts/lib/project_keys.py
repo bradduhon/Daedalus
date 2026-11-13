@@ -1212,7 +1212,7 @@ OVERLAPS: tuple[Overlap, ...] = (
                 238,
                 "a key the override sets replaces the base value",
             ),
-            ("scripts/lib/train_runner.py", 1523, "operator = operator_file.load(repo)"),
+            ("scripts/lib/train_runner.py", 1529, "operator = operator_file.load(repo)"),
             ("scripts/lib/self_assessment.py", 49, "load(project_root(Path(path)))"),
             ("scripts/lib/developer_profile.py", 51, "load(project_root(Path(repo_root)))"),
             ("scripts/lib/handoff.py", 103, "overlay(load_user(), config.operator).context_limit"),

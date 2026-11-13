@@ -279,7 +279,7 @@ def test_lock_commits_the_contract_on_the_integration_branch(repo: Path) -> None
     path = _contract(repo)
     lines = lock(repo, "contracts/api.md", 1)
     sha = _ok(repo, "rev-parse", f"daedalus/{train}")
-    assert lines == [f"lock: {sha}", f"contract: {path} v1"]
+    assert lines == [f"lock: {sha}", f"contract: {path} v1 sha256={_sha(V1)}"]
     assert _head(repo) == f"daedalus/{train}" and sha != base
     assert _subject(repo) == "Lock contract api v1"
     assert _ok(repo, "rev-parse", "HEAD~1") == base
@@ -344,7 +344,7 @@ def test_lock_commits_a_charter_contract_in_the_charter(repo: Path, charter: Pat
     base = _ok(repo, "rev-parse", "HEAD")
     path = _contract(charter, "specs/api.md")
     lines = lock(repo, str(path), 1)
-    assert lines == [f"lock: {base}", f"contract: {path} v1"]
+    assert lines == [f"lock: {base}", f"contract: {path} v1 sha256={_sha(V1)}"]
     assert _head(charter) == f"daedalus/{train}"
     assert _subject(charter) == "Lock contract api v1"
     assert _head(repo) == f"daedalus/{train}"
@@ -456,6 +456,55 @@ def test_lock_revise_rewrites_open_briefs_and_leaves_merged_ones(repo: Path) -> 
     assert merged_brief.read_text().startswith(f"{old}\n")
 
 
+def test_lock_revise_rewrites_the_docs_brief_while_the_docs_unit_is_open(repo: Path) -> None:
+    # issue 325: the docs unit's brief is briefs/docs.md, not briefs/docstage.md.
+    train = _locked_train(repo)
+    _unit(repo, train, "docstage")
+    brief = _brief(repo, train, train_runner.DOCS_BRIEF, _contract_line(repo))
+    _contract(repo, text=V2)
+    lines = lock(repo, "contracts/api.md", 2)
+    assert lines[2:] == [f"brief refreshed: {brief} contract={_sha(V2)[:12]}"]
+    assert brief.read_text().startswith(f"{_contract_line(repo, V2)}\n")
+    _contract(repo, text="packet v3\n")
+    again = lock(repo, "contracts/api.md", 3)
+    assert again[2:] == [f"brief refreshed: {brief} contract={_sha('packet v3\n')[:12]}"]
+
+
+def test_lock_revise_without_a_docs_unit_ignores_a_docs_brief(repo: Path) -> None:
+    # issue 325: no docs unit recorded, so briefs/docs.md is not an open brief.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    old = _contract_line(repo)
+    docs = _brief(repo, train, train_runner.DOCS_BRIEF, old)
+    brief = _brief(repo, train, "u1.md", old)
+    _contract(repo, text=V2)
+    assert lock(repo, "contracts/api.md", 2)[2:] == [
+        f"brief refreshed: {brief} contract={_sha(V2)[:12]}"
+    ]
+    assert docs.read_text().startswith(f"{old}\n")
+
+
+def test_first_lock_after_a_skip_rewrites_a_contract_none_docs_brief(repo: Path) -> None:
+    # issue 325, 0261: a docs brief with Contract: none takes the packet line like any brief.
+    train = _train(repo)
+    train_state.update(repo, train, contract_skip=True)
+    lock(repo, None)
+    _unit(repo, train, "docstage")
+    brief = _brief(repo, train, train_runner.DOCS_BRIEF, "Contract: none")
+    path = _contract(repo)
+    lines = lock(repo, "contracts/api.md", 1)
+    assert lines[2:] == [f"brief refreshed: {brief} contract={_sha(V1)[:12]}"]
+    assert brief.read_text().startswith(f"{_contract_line(repo)}\n")
+    assert path.is_file()
+
+
+def test_lock_revise_prints_the_new_contract_hash(repo: Path) -> None:
+    # issue 325: the yield row copies this line instead of running sha256sum by hand.
+    _locked_train(repo)
+    path = _contract(repo, text=V2)
+    assert lock(repo, "contracts/api.md", 2)[1] == f"contract: {path} v2 sha256={_sha(V2)}"
+
+
 def test_lock_refresh_twice_rewrites_nothing_the_second_time(repo: Path) -> None:
     # 0261: a second revise over the same packet bytes finds every open brief current.
     train = _locked_train(repo)
@@ -546,7 +595,7 @@ def test_first_lock_after_a_skip_rewrites_a_contract_none_brief(repo: Path) -> N
     path = _contract(repo)
     lines = lock(repo, "contracts/api.md", 1)
     assert lines[1:] == [
-        f"contract: {path} v1",
+        f"contract: {path} v1 sha256={_sha(V1)}",
         f"brief refreshed: {brief} contract={_sha(V1)[:12]}",
     ]
     assert brief.read_text().startswith(f"{_contract_line(repo)}\n")
@@ -1760,6 +1809,23 @@ def test_merge_refuses_a_unit_completed_against_an_older_contract(repo: Path) ->
     assert u1.exists() and _merges(repo, f"daedalus/{train}") == []
     _completed(repo, train, "u1", f"contract={_sha(V2)[:12]}")
     assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
+
+
+def test_merge_refuses_with_its_own_next_step_when_the_contract_file_is_gone(repo: Path) -> None:
+    # issue 325: the unreadable-contract refusal names the merge's next step, not "step again".
+    train, u1, _ = _wave_train(repo)
+    _completed(repo, train, "u1", f"contract={_sha(V1)[:12]}")
+    path = repo / "contracts" / "api.md"
+    path.unlink()
+    _dispatch(repo, u1)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
+    with pytest.raises(WorkspaceError) as info:
+        workspace.merge(repo, ["U1"])
+    assert str(info.value) == (
+        f"unit U1 cannot be compared with its contract: {path} could not be read. "
+        f"Next: restore the contract file at {path}, then rerun the merge."
+    )
+    assert u1.exists() and _merges(repo, f"daedalus/{train}") == []
 
 
 def test_finish_refuses_a_complete_line_with_no_contract_field(repo: Path) -> None:
