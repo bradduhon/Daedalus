@@ -2734,6 +2734,8 @@ OPEN_MODES: dict[str, tuple[str, str, str]] = {
     ),
 }
 UNATTENDED = "unattended"
+# 0276: who orchestrates each open mode, as begin --orchestrator records it.
+OPEN_BY = {"main": train_state.BY_SESSION, UNATTENDED: train_state.BY_AGENT}
 
 
 def _unopen(repo: Path, train_id: str, cause: str) -> str:
@@ -2754,7 +2756,7 @@ def _unopen(repo: Path, train_id: str, cause: str) -> str:
 
 
 def open_run(cwd: Path, mode: str) -> Outcome:
-    # 0230, 253: begin, the agent choice and, unattended, the orchestrator's model in one call.
+    # 0230, 253: begin, who orchestrates, the agent choice and, unattended, the model in one call.
     if mode not in OPEN_MODES:
         return Outcome(
             EXIT_STOP,
@@ -2770,11 +2772,18 @@ def open_run(cwd: Path, mode: str) -> Outcome:
     repo = workspace.repo_root(cwd.resolve())
     train_id = train_state.active_train(repo) or lines[0].split()[1]
     try:
+        record_orchestrating(repo, OPEN_BY[mode])
         lines += _sub(choice(repo, *OPEN_MODES[mode]))
         if mode == UNATTENDED:
             config = load_config(cwd=str(repo))
             lines.append(resolve_model(ORCHESTRATOR_AGENT, config, None, repo=repo))
-    except (RunnerError, AgentModelError, ConfigError, DataDirError) as exc:
+    except (
+        RunnerError,
+        AgentModelError,
+        ConfigError,
+        DataDirError,
+        train_state.TrainStateError,
+    ) as exc:
         return _with_next(Outcome(EXIT_STOP, [_unopen(repo, train_id, str(exc))]), "open")
     return Outcome(EXIT_OK, lines)
 

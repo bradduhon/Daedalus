@@ -73,15 +73,23 @@ def _open_shot(root: Path) -> dict[str, str]:
     return shot
 
 
+BY = {"main": train_state.BY_SESSION, "unattended": train_state.BY_AGENT}
+
+
 @pytest.mark.usefixtures("fixed")
 @pytest.mark.parametrize("mode", ["main", "unattended"])
 def test_open_leaves_what_begin_choice_and_model_leave(tmp_path: Path, mode: str) -> None:
     seq, one = _project(tmp_path / "seq" / "repo"), _project(tmp_path / "one" / "repo")
+    # 0276: begin --orchestrator <by> is begin then record_orchestrating, as the CLI runs it.
     begun = workspace.begin(seq)
+    train_runner.record_orchestrating(seq, BY[mode])
     chose = _ok(train_runner.choice(seq, *train_runner.OPEN_MODES[mode]))
     words = _ok(daedalus_train._model(seq, "orchestrator", None)) if mode == "unattended" else []
     lines = _ok(train_runner.open_run(one, mode))
     assert _open_shot(seq) == _open_shot(one)
+    held = train_state.load(one, TRAIN)[train_state.ORCHESTRATING]
+    assert isinstance(held, dict) and held["by"] == BY[mode]
+    assert _ok(train_runner.orchestrating_read(seq)) == _ok(train_runner.orchestrating_read(one))
     expected = [*begun, *chose, *words]
     assert [ln.replace(str(one), "<r>") for ln in lines] == [
         ln.replace(str(seq), "<r>") for ln in expected
@@ -103,6 +111,25 @@ def test_open_from_the_command_line_prints_the_seed_the_choice_and_the_model(
     assert out[6] == f"Chose {chose} over {over}: {cost}"
     assert out[7] in agent_models.MODELS and len(out) == 8
     assert train_state.active_train(root) == out[0].split()[1]
+
+
+@pytest.mark.parametrize("mode", ["main", "unattended"])
+def test_model_orchestrating_reads_the_same_after_open_as_after_begin(
+    tmp_path: Path, mode: str
+) -> None:
+    # 0276, 253: open --mode main records session and --mode unattended records agent.
+    seq, one = _project(tmp_path / "seq" / "repo"), _project(tmp_path / "one" / "repo")
+    begun = run_cli(
+        "daedalus_workspace.py", "begin", "--repo", str(seq), "--orchestrator", BY[mode], cwd=seq
+    )
+    opened = run_cli("daedalus_train.py", "open", "--repo", str(one), "--mode", mode, cwd=one)
+    assert begun.returncode == 0 and opened.returncode == 0, begun.stderr + opened.stdout
+    reads = [
+        run_cli("daedalus_train.py", "model", "--repo", str(r), "--orchestrating", cwd=r)
+        for r in (seq, one)
+    ]
+    assert reads[0].returncode == reads[1].returncode == 0, reads[1].stdout
+    assert reads[0].stdout == reads[1].stdout and reads[1].stdout.strip()
 
 
 def _left_nothing(root: Path) -> None:
@@ -283,6 +310,8 @@ def test_the_skills_make_each_step_one_call() -> None:
     plugin = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py"
     opened = f"`{plugin} open --repo <repo> --mode <mode>`"
     assert run.index(opened) < run.index("--hooks-live")
+    assert "records who orchestrates the run (0276)" in run
+    assert "`--mode unattended` records it as begin's `--orchestrator agent` does" in run
     for chose, over, cost in train_runner.OPEN_MODES.values():
         assert f'`--chose "{chose}" --over "{over}" --cost "{cost}"`' in run
     assert f"{plugin} choice --repo <repo> --chose" not in run
