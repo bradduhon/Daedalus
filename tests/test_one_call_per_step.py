@@ -173,6 +173,27 @@ def test_a_choice_failure_after_begin_leaves_no_run(
     _left_nothing(root)
 
 
+@pytest.mark.usefixtures("fixed")
+@pytest.mark.parametrize("mode", ["main", "unattended"])
+def test_a_failed_orchestrating_record_after_begin_leaves_no_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    # 0276, 253: only the write of the orchestrating field fails; begin's own writes go through.
+    root = _project(tmp_path / "repo")
+    real = train_state.update
+
+    def _update(repo: Path, train_id: str, **fields: object) -> dict[str, object]:
+        if train_state.ORCHESTRATING in fields:
+            raise train_state.TrainStateError("record not written. Next: fix the state folder.")
+        return real(repo, train_id, **fields)
+
+    monkeypatch.setattr(train_state, "update", _update)
+    refused = train_runner.open_run(root, mode)
+    assert refused.code == 1, refused.lines
+    assert "\n".join(refused.lines).count("Next:") == 1, refused.lines
+    _left_nothing(root)
+
+
 def test_open_on_a_dirty_tree_is_refused_with_one_next_line(tmp_path: Path) -> None:
     root = _project(tmp_path / "repo")
     (root / "draft.md").write_text("x\n")
