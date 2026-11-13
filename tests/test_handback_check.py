@@ -389,6 +389,18 @@ def test_the_script_denies_a_handback_in_a_train(tmp_path: Path) -> None:
     assert short.splitlines()[2:] == CODER_MESSAGE.splitlines()[2:]
 
 
+def test_the_script_saves_a_short_coder_reply_it_passes_whole(tmp_path: Path) -> None:
+    # issue 216: a coder reply too short to digest goes out as written and is saved whole.
+    (tmp_path / ".git").mkdir()
+    (tmp_path / TRAIN_MARKER).parent.mkdir(parents=True)
+    (tmp_path / TRAIN_MARKER).write_text("20261026-002310\n", encoding="utf-8")
+    assert _run(json.dumps(_handback(CODER_MESSAGE, cwd=str(tmp_path)))).stdout == ""
+    folder = tmp_path / "docs/.tmp/daedalus/20261026-002310/evidence/replies"
+    saved = list(folder.iterdir())
+    assert len(saved) == 1 and saved[0].name.startswith("coder-")
+    assert saved[0].read_text(encoding="utf-8") == CODER_MESSAGE
+
+
 def test_the_script_steps_aside_on_a_handback_outside_a_train(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     got = _run(json.dumps(_handback(_reply("done", COMPLETE), cwd=str(tmp_path))))
