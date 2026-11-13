@@ -378,6 +378,39 @@ def test_the_new_coders_brief_is_the_units_brief_plus_the_handoff_line(tmp_path:
     assert [r for r in rows if r.startswith("Hand-off: ")] == ["Hand-off: /tmp/h/new.md"]
 
 
+@pytest.mark.usefixtures("tmp_root")
+def test_the_whole_handoff_path_end_to_end_through_the_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _bound(tmp_path)
+    # The coder returns past the limit; the hook records its size on the unit.
+    _return(monkeypatch, capsys, root, OLD, YIELD, "coder", _transcript(OLD, PAST))
+    assert _unit(root)[train_state.SIZES] == {OLD: {"tokens": PAST}}
+    code, out = _cli(root, "dispatch", "--unit", "U1", "--warm", OLD)
+    assert code == 1 and "--handoff-write" in out and out.count("Next:") == 1, out
+    code, out = _cli(root, "dispatch", "--unit", "U1", "--warm", OLD, "--handoff-write")
+    assert code == 0 and out.startswith("handoff-write U1: "), out
+    code, out = _cli(root, "dispatch", "--unit", "U1", "--warm", OLD, "--handoff-write")
+    assert code == 1 and "already resumed once" in out, out
+    # The coder writes its hand-off file and hands back; the hook records the hand-off.
+    path = _path_handoff(root, OLD)
+    reply = f"Wrote it.\n[STATUS: HANDOFF] path={path}"
+    out = _return(monkeypatch, capsys, root, OLD, reply, "coder", _transcript(OLD, PAST))
+    assert "deny" not in out
+    assert _unit(root)[train_state.HANDOFFS] == [
+        {"old": OLD, "tokens": PAST, "file": str(path), "new": None}
+    ]
+    code, out = _cli(root, "dispatch", "--unit", "U1")
+    assert code == 0 and out.splitlines()[0].endswith(f" handoff={path}"), out
+    brief = (_scratch(root) / "briefs" / "u1.md").read_text(encoding="utf-8")
+    assert f"\nHand-off: {path}\n" in brief
+    # The new coder's first write binds the unit; its first return fills `new`.
+    assert unit_binding.claim(root, TRAIN, NEW, U1) is None
+    _return(monkeypatch, capsys, root, NEW, YIELD, "coder", _transcript(NEW, 40))
+    assert _unit(root)[train_state.HANDOFFS][0]["new"] == NEW
+    assert _unit(root)[train_state.SIZES][NEW] == {"tokens": 40}
+
+
 # Item 5: the state print and the summary.
 
 

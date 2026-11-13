@@ -43,6 +43,9 @@ between Bash calls.
    A train the contract step skipped (0156, 0182) carries `Contract: none` in its brief, in
    place of the contract line. Then read no contract file, check only the Standards hash, and
    write `packet_version=none` and `contract=none` in your COMPLETE line.
+   A brief may carry a `Hand-off: <file>` line (0284); when it does, read that file first: it
+   is the last coder's account of what is done, what is left, the files touched and the next
+   step, and the unit's brief and its requirements still rule.
 3. **No network**: the jail blocks it. Do not try to work around it.
 4. **Yield Protocol**: when blocked by missing external docs, an ambiguous handshake, or a
    compliance question, first run
