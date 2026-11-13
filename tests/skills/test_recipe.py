@@ -283,7 +283,7 @@ def test_build_train_rereads_changed_rule_files_from_the_standards_skill() -> No
     step3 = _phase_step("audit", 2)
     assert step3.startswith("Auditor brief. Load the standards skill")
     assert "the rule files changed since its last read" in step3
-    assert "resumes the same auditor with the same items" in _phase_step("audit", 5)
+    assert "is a new `auditor` dispatch on the model" in _phase_step("audit", 5)
     assert "find <source path> -type f -newermt '<last read>'" in _standards_skill()
 
 
@@ -344,7 +344,7 @@ def test_build_train_runs_the_audit_in_a_fast_forwarded_worktree() -> None:
     assert "The refresh is a fast-forward" in step3 and "`git merge --ff-only`" in step3
     assert "It never discards a commit" in step3 and "`git -C <path> status`" in step3
     assert "and the line `Worktree: <audit worktree path>`" in step3
-    assert "minus the `Worktree:` line" in step3
+    assert "the `Worktree:` line included" in step3
     assert "`<repo>/docs/.tmp/daedalus/<train-id>/audit/round<n>/findings.txt`" in step3
     assert "    audit worktree: <path, or pending>\n" in text
     merge = _phase_step("build", 10)
