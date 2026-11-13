@@ -23,6 +23,8 @@ APPROVED_NEXT = "Next: run /daedalus:run; this train has no approved audit in it
 AUDITOR = "daedalus:auditor"
 VERDICT_APPROVED = "[VERDICT: APPROVED]"
 VERDICT_REJECTED = "[VERDICT: REJECTED]"
+# agents/verifier.md: the verdict line a refuting verifier ends its reply with.
+REFUTED_PREFIX = "[VERDICT: REFUTED]"
 HANDBACK = "SubagentHandback"
 _VERDICT_FIELDS = ("last_message_head", "last_message_tail")
 _HANDBACK_FIELD = "tool_input.message"
