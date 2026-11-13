@@ -210,7 +210,11 @@ def _parser() -> argparse.ArgumentParser:
     fixed.add_argument("--finding", action="append", default=[])
     fixed.add_argument("--row", action="append", type=int, default=[])
     fixed.add_argument("--requirements", type=Path, required=True)
-    fixed.add_argument("--class", dest="work_class")
+    fixed.add_argument(
+        "--class",
+        dest="work_class",
+        help="the fix unit's class; with none it takes the class of the unit it fixes (349)",
+    )
     fixed.add_argument("--place")
     fixed.add_argument("--class-reason", dest="class_reason")
     # 0256: the run fetches Terraform providers once, outside the kernel wrapper.
