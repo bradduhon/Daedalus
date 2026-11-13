@@ -1059,7 +1059,10 @@ def _skip_scope(
         for unit in merging
         if _run(repo, "merge-base", "--is-ancestor", str(unit["branch"]), integration).returncode
     ]
-    files = [f for unit in _recorded_plan(state).units for f in unit.files]
+    # 0271: counted once each, so a fix unit naming the planned unit's files keeps the count.
+    files = sorted(
+        {os.path.normpath(f) for unit in _recorded_plan(state).units for f in unit.files}
+    )
     nxt = SKIP_NEXT.format(repo=repo)
     if len(pending) > 1 or not 1 <= len(files) <= plan_record.CONTRACT_SKIP_FILES:
         raise WorkspaceError(

@@ -54,6 +54,8 @@ AUDIT_ROUNDS = "audit_rounds"
 # spec 4, pin C4 -> C1: the audit worktree is the unit <train-id>-audit, flagged "audit": true.
 AUDIT, AUDIT_SUFFIX = "audit", "-audit"
 _AUDIT_NAME = re.compile(rf"{TRAIN_ID.pattern}{AUDIT_SUFFIX}")
+# 0271: {"<unit id>": {"fixes": [ids], "findings": [keys], "round": n} or {"rows": [n], "seq": s}}.
+FIX_UNITS = "fix_units"
 
 
 class TrainStateError(RuntimeError):
@@ -260,6 +262,28 @@ def add_unit(
             entry[AUDIT] = True
         state["units"] = [*recorded, entry]
         _write(target, state)
+
+
+def _words(value: object) -> list[str]:
+    return [str(v) for v in value if isinstance(v, str | int)] if isinstance(value, list) else []
+
+
+def fix_lines(state: dict[str, object]) -> list[tuple[str, str]]:
+    # 0271: each fix unit's id and the one mark the state print and the summary carry.
+    out: list[tuple[str, str]] = []
+    for uid, entry in record(state, FIX_UNITS).items():
+        if not isinstance(entry, dict):
+            continue
+        fixes = ", ".join(_words(entry.get("fixes"))) or "no recorded unit"
+        parts = []
+        if entry.get("findings"):
+            keys = "; ".join(_words(entry.get("findings")))
+            parts.append(f"round {entry.get('round')} findings {keys}")
+        if entry.get("rows"):
+            rows = ", ".join(_words(entry.get("rows")))
+            parts.append(f"rows {rows} of the verifier verdict at seq {entry.get('seq')}")
+        out.append((uid, f"{uid} is a fix of {fixes}, answering {' and '.join(parts)}"))
+    return out
 
 
 def mark_audit(repo: Path, train_id: str, name: str) -> None:
