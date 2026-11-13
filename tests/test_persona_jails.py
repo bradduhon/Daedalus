@@ -152,7 +152,8 @@ def test_public_docs_writer_refuses_a_public_doc_in_a_coder_unit(
     reason = evaluate("unit_writes", payload, "--docs")
     assert reason is not None and f"docs worktree {DOCS}" in reason, reason
     # 0054: without --docs the same write is a coder's ordinary unit write.
-    assert "writer" not in str(evaluate("unit_writes", payload))
+    # issue 306: the coder refusal names the repository, whose temp path holds this test's name.
+    assert "writer" not in str(evaluate("unit_writes", payload)).replace(str(repo_cwd), "")
 
 
 @pytest.mark.parametrize(

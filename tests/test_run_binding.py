@@ -377,6 +377,10 @@ def test_a_dispatch_from_a_folder_with_no_run_binds_the_named_run(
     # 218, issue 29: the unit gate of the bound run judges; no unit binding is recorded here.
     result = _write(run_script, away, "agent-a", wt / "x.py")
     assert result.returncode == 2 and f"never dispatched in train {TRAIN}" in result.stderr
+    # issue 306: the refusal names the outside session folder as the cause and one next step.
+    assert f"session folder outside {repo}" in result.stderr
+    assert f"Next: start a new coder from a session inside {repo}," in result.stderr
+    assert result.stderr.count("Next:") == 1
     rows = [r for r in audit_records(audit.log_path(SESSION, str(wt))) if r["agent_id"]]
     assert [(r["cwd"], r["payload_cwd"]) for r in rows] == [(str(wt), str(away))], rows
     assert rows[0]["binding"]["train_id"] == TRAIN

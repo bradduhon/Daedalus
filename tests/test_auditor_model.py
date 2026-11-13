@@ -230,6 +230,7 @@ def test_a_raised_unit_raises_the_auditor_and_is_recorded(tmp_path: Path) -> Non
                 "raised": True,
             },
         },
+        "raised_keys": {"U2": ["web/u2.html:login work-class"]},
     }
     picked = train_state.load(root, TRAIN)[train_state.AUDITOR_MODEL]
     assert picked == {"model": "opus", "class": "AuthN", "unit": "U2", "raised_from": "Plumbing"}
@@ -445,4 +446,7 @@ def test_the_audit_skill_runs_the_class_check_then_the_model_then_round_one() ->
     auditor = (REPO_ROOT / "agents" / "auditor.md").read_text(encoding="utf-8")
     section = auditor.split("## Class check first (0280)\n", 1)[1].split("\n## ", 1)[0]
     assert section.count(". ") + section.count(".\n") <= 4
-    assert "opus" not in section and "function" not in section
+    # 349: "function" only beside the section and line range a document or investigation names.
+    clause = "the named part is a function, a section or a\nline range, never a sentence"
+    assert clause in section and section.count("function") == 1
+    assert "opus" not in section
