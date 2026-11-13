@@ -28,6 +28,7 @@ from lib.train_runner import (  # noqa: E402
     EXIT_ROUTED,
     EXIT_STOP,
     UNIT_AGENTS,
+    FixUnit,
     Outcome,
     RunnerError,
     _unit_record,
@@ -36,6 +37,7 @@ from lib.train_runner import (  # noqa: E402
     contract,
     dispatch_unit,
     finish_unit,
+    fix_unit,
     progress,
     reaudit,
     record_docs_verdict,
@@ -63,7 +65,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
         "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch, route, "
-        "finish-unit, providers, validate. "
+        "finish-unit, fix-unit, providers, validate. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -188,6 +190,19 @@ def _parser() -> argparse.ArgumentParser:
     done.add_argument("--next", dest="next_unit")
     done.add_argument("--warm")
     done.add_argument("--note", action="append", default=[])
+    # 0271: a fix unit joins the recorded plan; requirements come from the caller's file.
+    fixed = sub.add_parser("fix-unit", allow_abbrev=False)
+    fixed.add_argument("--repo", type=Path, required=True)
+    fixed.add_argument("--unit", required=True)
+    fixed.add_argument("--title", required=True)
+    fixed.add_argument("--files", required=True)
+    fixed.add_argument("--fixes", action="append", required=True)
+    fixed.add_argument("--finding", action="append", default=[])
+    fixed.add_argument("--row", action="append", type=int, default=[])
+    fixed.add_argument("--requirements", type=Path, required=True)
+    fixed.add_argument("--class", dest="work_class")
+    fixed.add_argument("--place")
+    fixed.add_argument("--class-reason", dest="class_reason")
     # 0256: the run fetches Terraform providers once, outside the kernel wrapper.
     fetch = sub.add_parser("providers", allow_abbrev=False)
     fetch.add_argument("--repo", type=Path, required=True)
@@ -428,6 +443,24 @@ def _model(repo: Path, agent: str, override: str | None, unit: str | None = None
         return Outcome(EXIT_STOP, [str(exc)])
 
 
+def _fix(args: argparse.Namespace) -> FixUnit:
+    # 0271: --files in the plan's own field form, comma-separated.
+    stripped = (args.title, args.work_class, args.place, args.class_reason)
+    title, work_class, place, reason = (v.strip() if v is not None else None for v in stripped)
+    return FixUnit(
+        args.unit.strip(),
+        title or "",
+        tuple(f.strip() for f in args.files.split(",") if f.strip()),
+        tuple(f.strip() for f in args.fixes),
+        tuple(args.finding),
+        tuple(args.row),
+        args.requirements,
+        work_class,
+        place,
+        reason,
+    )
+
+
 def _dispatch(args: argparse.Namespace) -> Outcome:
     repo = args.repo.resolve()
     if args.action == "start":
@@ -536,6 +569,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return route_unit(repo, args.unit, args.verdict, args.rows)
     if args.action == "finish-unit":
         return finish_unit(repo, args.unit, args.next_unit, args.note, args.warm)
+    if args.action == "fix-unit":
+        return fix_unit(repo, _fix(args))
     if args.action == "providers":
         return _providers(repo, args.allow)
     if args.action == "validate":
