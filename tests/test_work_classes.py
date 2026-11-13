@@ -65,7 +65,10 @@ def _repo(tmp_path: Path, override: object) -> Path:
     return repo
 
 
-def test_the_shipped_defaults_hold_sixteen_classes_on_three_models() -> None:
+NEW_CLASSES = ("Injection sinks", "Isolation and confinement", "Supply chain", "Redaction")
+
+
+def test_the_shipped_defaults_hold_twenty_classes_on_three_models() -> None:
     names = [name for name, _ in DEFAULT_CLASSES]
     # 0267, 0275: the operator's own class names, in spec section 4 order.
     assert names == [
@@ -83,13 +86,18 @@ def test_the_shipped_defaults_hold_sixteen_classes_on_three_models() -> None:
         "Network exposure",
         "Audit trail",
         "Policy as code",
+        "Injection sinks",
+        "Isolation and confinement",
+        "Supply chain",
+        "Redaction",
         PLUMBING,
         MECHANICAL,
     ]
     assert (PLUMBING, MECHANICAL) == ("Plumbing", "Mechanical")
     models = dict(DEFAULT_MODELS)
     assert list(models) == names
-    assert [n for n in names if models[n] == TOP_MODEL] == names[:14]
+    assert [n for n in names if models[n] == TOP_MODEL] == names[:18]
+    assert all(models[n] == TOP_MODEL for n in NEW_CLASSES)
     assert models[PLUMBING] == MIDDLE_MODEL and models[MECHANICAL] == SMALLEST_MODEL
     assert (TOP_MODEL, MIDDLE_MODEL, SMALLEST_MODEL) == ("opus", "sonnet", "haiku")
 
