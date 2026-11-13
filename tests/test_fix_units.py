@@ -126,7 +126,8 @@ def test_fix_unit_writes_its_line_edge_section_and_graph(tmp_path: Path) -> None
         str(reqs),
     )
     assert code == 0, out
-    assert re.fullmatch(rf"fix-unit fix1-u1: fixes U1 plan sha256={HEX64}\n", out), out
+    want = rf"fix-unit fix1-u1: fixes U1 class=Plumbing \(from U1\) plan sha256={HEX64}\n"
+    assert re.fullmatch(want, out), out
     text = _plan(root).read_text(encoding="utf-8")
     block = text.split("```plan\n")[1].split("```")[0].splitlines()
     assert block[-3:] == [
@@ -205,7 +206,8 @@ def test_two_fix_units_the_second_fixing_the_first(tmp_path: Path) -> None:
     _ok(train_runner.finish_unit(root, "fix1-u1"))
     _rejected(root, 2, "F3")
     second = _fix(root, "fix2-u1", ("fix1-u1",), ("F3",), reqs=(REQ_F3,))
-    assert re.fullmatch(rf"fix-unit fix2-u1: fixes fix1-u1 plan sha256={HEX64}", _ok(second)[0])
+    want = rf"fix-unit fix2-u1: fixes fix1-u1 class=Plumbing \(from fix1-u1\) plan sha256={HEX64}"
+    assert re.fullmatch(want, _ok(second)[0])
     text = _plan(root).read_text(encoding="utf-8")
     assert "edge: fix1-u1 -> fix2-u1 | kind: serial" in text
     assert "graph: units=4 critical_path=3 width=2 overlap_only=none" in text
