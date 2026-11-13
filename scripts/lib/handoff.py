@@ -21,6 +21,7 @@ from lib.context_size import (
     context_size,
     default_root,
 )
+from lib.operator_file import load_user, overlay
 
 FEATURE = "handoffs"
 STATUS = "[STATUS: HANDOFF]"
@@ -98,8 +99,6 @@ def active_limit(limit: int | None) -> int | None:
 
 def limit_for(config: Config) -> int | None:
     # 0284: the personal context_limit with this project's personal_overrides laid over it.
-    from lib.operator_file import load_user, overlay
-
     return active_limit(overlay(load_user(), config.operator).context_limit)
 
 

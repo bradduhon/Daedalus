@@ -442,13 +442,13 @@ def test_splice_replaces_or_inserts_only_the_one_value(
     assert settings_edit.splice(text, path, value) == want
 
 
-def test_each_overlap_answer_rests_on_the_line_it_cites() -> None:
-    # 0242: a moved or changed line fails here, so the answer is reread before it ships.
+def test_each_overlap_citation_names_text_found_once_in_its_file() -> None:
+    # 0242: a changed or duplicated line fails here; a moved line does not.
     assert [o.id for o in OVERLAPS] == ["docs", "literacy", "operator"]
     for overlap in OVERLAPS:
-        for path, line, words in overlap.sources:
-            text = (REPO_ROOT / path).read_text(encoding="utf-8").splitlines()[line - 1]
-            assert words in text, (overlap.id, path, line)
+        for path, words in overlap.sources:
+            lines = (REPO_ROOT / path).read_text(encoding="utf-8").splitlines()
+            assert sum(words in line for line in lines) == 1, (overlap.id, path, words)
 
 
 def test_overlaps_with_no_deciding_code_say_so_in_future_tense() -> None:
