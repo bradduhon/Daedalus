@@ -756,8 +756,9 @@ def lock(repo: Path, contract: str | None, version: int | None = None) -> list[s
     # 0150, issue 96: a revise keeps the lock at the train base, never the integration tip.
     kept = state.get("lock_sha") if isinstance(recorded, int) else None
     sha = kept if isinstance(kept, str) and kept else _out(repo, "rev-parse", integration).strip()
+    # issue 325: the new hash rides the line, so the build skill's yield row needs no sha256sum.
     detail = (
-        f"contract: {path} v{version}"
+        f"contract: {path} v{version} sha256={hashlib.sha256(path.read_bytes()).hexdigest()}"
         if unchanged.returncode == 1
         else "contract unchanged, no commit"
     )

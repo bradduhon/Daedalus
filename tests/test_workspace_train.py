@@ -279,7 +279,7 @@ def test_lock_commits_the_contract_on_the_integration_branch(repo: Path) -> None
     path = _contract(repo)
     lines = lock(repo, "contracts/api.md", 1)
     sha = _ok(repo, "rev-parse", f"daedalus/{train}")
-    assert lines == [f"lock: {sha}", f"contract: {path} v1"]
+    assert lines == [f"lock: {sha}", f"contract: {path} v1 sha256={_sha(V1)}"]
     assert _head(repo) == f"daedalus/{train}" and sha != base
     assert _subject(repo) == "Lock contract api v1"
     assert _ok(repo, "rev-parse", "HEAD~1") == base
@@ -344,7 +344,7 @@ def test_lock_commits_a_charter_contract_in_the_charter(repo: Path, charter: Pat
     base = _ok(repo, "rev-parse", "HEAD")
     path = _contract(charter, "specs/api.md")
     lines = lock(repo, str(path), 1)
-    assert lines == [f"lock: {base}", f"contract: {path} v1"]
+    assert lines == [f"lock: {base}", f"contract: {path} v1 sha256={_sha(V1)}"]
     assert _head(charter) == f"daedalus/{train}"
     assert _subject(charter) == "Lock contract api v1"
     assert _head(repo) == f"daedalus/{train}"
@@ -498,6 +498,13 @@ def test_first_lock_after_a_skip_rewrites_a_contract_none_docs_brief(repo: Path)
     assert path.is_file()
 
 
+def test_lock_revise_prints_the_new_contract_hash(repo: Path) -> None:
+    # issue 325: the yield row copies this line instead of running sha256sum by hand.
+    _locked_train(repo)
+    path = _contract(repo, text=V2)
+    assert lock(repo, "contracts/api.md", 2)[1] == f"contract: {path} v2 sha256={_sha(V2)}"
+
+
 def test_lock_refresh_twice_rewrites_nothing_the_second_time(repo: Path) -> None:
     # 0261: a second revise over the same packet bytes finds every open brief current.
     train = _locked_train(repo)
@@ -588,7 +595,7 @@ def test_first_lock_after_a_skip_rewrites_a_contract_none_brief(repo: Path) -> N
     path = _contract(repo)
     lines = lock(repo, "contracts/api.md", 1)
     assert lines[1:] == [
-        f"contract: {path} v1",
+        f"contract: {path} v1 sha256={_sha(V1)}",
         f"brief refreshed: {brief} contract={_sha(V1)[:12]}",
     ]
     assert brief.read_text().startswith(f"{_contract_line(repo)}\n")
