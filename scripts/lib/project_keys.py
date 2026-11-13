@@ -840,7 +840,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"{MAX_CLASSES}; a name is one line of 1 to {NAME_MAX} characters, unique ignoring "
         f"case and not starting with an underscore; a definition is one line of 1 to "
         f"{DEFINITION_MAX} characters",
-        "Absent or `null`: the shipped classes, fourteen kinds of security work plus "
+        "Absent or `null`: the shipped classes, eighteen kinds of security work plus "
         f"`{PLUMBING}` and `{MECHANICAL}`; `[]` means no classes, so all work runs on "
         f'`"{MIDDLE_MODEL}"`',
         f'`[{{"name": "{PLUMBING}", "definition": "{dict(DEFAULT_CLASSES)[PLUMBING]}"}}]`',
@@ -856,7 +856,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "object",
         f"Keys are names the classes list holds; values are {_MODEL_NAMES}; any other name or "
         "value is refused",
-        f'Absent or `null`: the fourteen security classes on `"{TOP_MODEL}"`, `{PLUMBING}` on '
+        f'Absent or `null`: the eighteen security classes on `"{TOP_MODEL}"`, `{PLUMBING}` on '
         f'`"{MIDDLE_MODEL}"` and `{MECHANICAL}` on `"{SMALLEST_MODEL}"`',
         f'`{{"{PLUMBING}": "{MIDDLE_MODEL}", "Tokens": "{TOP_MODEL}"}}`',
         "In a run, the coding agent and the verifier of each unit run on the model its class "

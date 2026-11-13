@@ -84,6 +84,20 @@ def test_the_class_picks_coder_and_verifier_at_zero_one_and_two_refutations(
     assert third.lines == ["route U2: operator model=opus refutations=3 checks=0"]
 
 
+@pytest.mark.parametrize(
+    "name", ["Injection sinks", "Isolation and confinement", "Supply chain", "Redaction"]
+)
+def test_a_unit_of_a_0285_class_gets_opus_from_the_model_command(
+    repo: Path,  # noqa: F811
+    name: str,
+) -> None:
+    _model_train(repo, block=CLASSED.replace("class: AuthN", f"class: {name}"))
+    for agent in ("coder", "verifier"):
+        code, lines = _model(repo, agent, "U2")
+        assert code == 0 and lines[0] == "opus"
+        assert lines[1] == f"{agent} U2: opus | class: {name} | class_reason: {REASON}"
+
+
 def test_the_coder_call_records_its_model_once_and_the_verifier_call_records_nothing(
     repo: Path,  # noqa: F811
 ) -> None:
