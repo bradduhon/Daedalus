@@ -230,3 +230,6 @@ of step 2, and run no command.
    the shell-semantics pack names, applied to that requirement.
 4. Write one row per form: `<req n> | <agent> | <admitted|refused> | <command>`.
 5. Reply with the `[ROWS] n=<count>` line pair of the status contract and the rows between.
+
+## Later round
+A dispatch that carries a `Range: <sha>..<sha>` line is a round after your refutation (0278). Read that range in place of the full diff of step 1, with `git -C <unit worktree> diff <range>` and `git -C <unit worktree> log <range>`, and reread the place of each `Place: <place> | rule: <rule>` line, saying in the table for each whether it is fixed. Read nothing else outside the range. A finding goes in the refuted row shape of the status contract, with its rule, places and search cells.

@@ -1865,6 +1865,8 @@ def _class_check(
 
 
 REFUTATIONS = "refutations"
+# 0278: {"<refutation key>": "<unit tip the refuted verdict judged>"}, written by the run only.
+JUDGED_TIPS = "judged_tips"
 _REFUTED_NEXT = (
     "Next: run refuted only on a unit whose verifier just replied [VERDICT: REFUTED], "
     "after that reply is in the audit log."
@@ -1914,6 +1916,11 @@ def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outco
             )
         else:
             key = seq
+        try:
+            # 0278: the coder is idle until the FIX message, so the branch tip is the tip judged.
+            judged = workspace.unit_tip(repo, unit)
+        except workspace.WorkspaceError as exc:
+            raise RunnerError(str(exc)) from exc
 
         def add(state: dict[str, object]) -> None:
             raw = state.get("units")
@@ -1922,6 +1929,9 @@ def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outco
                     seqs = _refutation_seqs(each)
                     # issue 187: a repeated call on the same reply or Fail records nothing new.
                     each[REFUTATIONS] = seqs if key in seqs else [*seqs, key]
+                    if key not in seqs:
+                        tips = train_state.record(each, JUDGED_TIPS)
+                        each[JUDGED_TIPS] = {**tips, str(key): judged}
             _reach_phase(state, "verify")
 
         after = train_state.change(repo, train_id, add)
@@ -1929,6 +1939,88 @@ def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outco
         return [f"refuted {unit_id}: {count}"]
 
     return _recorded(cwd, edit)
+
+
+# 0278: a later verifier round reads this range and rereads each place, nothing else.
+RANGE_PREFIX, PLACE_PREFIX = "Range: ", "Place: "
+
+
+def _refuted_places(
+    repo: Path, state: dict[str, object], unit: dict[str, object], key: int | str
+) -> list[str]:
+    # 0278, 0281: each place of the refutation's rows, in row order; an operator check has none.
+    if isinstance(key, str):
+        return []
+    worktree = Path(str(unit["path"]))
+    records = workspace._audit_records(repo, state)
+    texts = [
+        t[3] for t in workspace._keyed_replies(records, worktree, -1, len(records)) if t[0] == key
+    ]
+    first = next((ln.strip() for ln in (texts[-1:] or [""])[0].splitlines() if ln.strip()), "")
+    rows = workspace.refuted_rows(first)
+    if not rows:
+        raise RunnerError(
+            f"the audit log holds no refuted verdict at seq {key}, the refutation recorded on this "
+            "unit, so its places cannot be read back. Next: stop the run with this line as the "
+            "reason."
+        )
+    lines: list[str] = []
+    for number, row in enumerate(rows, start=1):
+        cells = audit_rounds.finding_cells(row)
+        places = [p.strip() for p in cells.get("places", "").split(audit_rounds.PLACE_SEP)]
+        if not cells.get("rule") or not all(places):
+            raise RunnerError(
+                f"row {number} of the refuted verdict at seq {key} lacks its rule or places "
+                "cell, so a later round cannot reread it. Next: stop the run with this line as "
+                "the reason."
+            )
+        lines += [f"{PLACE_PREFIX}{place} | rule: {cells['rule']}" for place in places]
+    return lines
+
+
+def _round_lines(repo: Path, train_id: str, unit_id: str, tip: str) -> list[str]:
+    # 0278: the range starts at the tip the run recorded with the refutation, never a reply's.
+    state = train_state.load(repo, train_id)
+    unit = _unit_record(state, train_id, unit_id)
+    branch = str(unit.get("branch") or "")
+    now = workspace.unit_tip(repo, unit)
+    if tip not in (branch, now):
+        raise RunnerError(
+            f"assets --tip {tip} is neither unit {unit_id}'s branch {branch} nor its tip "
+            f"{now}. Next: rerun assets with the unit's own branch as --tip {branch}."
+        )
+    keys = _refutation_seqs(unit)
+    if not keys:
+        return []
+    key = keys[-1]
+    judged = train_state.record(unit, JUDGED_TIPS).get(str(key))
+    if not isinstance(judged, str) or TIP.fullmatch(judged) is None:
+        # 0278: a refutation recorded before the judged tip was kept reads the whole unit.
+        return []
+    if judged == now:
+        raise RunnerError(
+            f"unit {unit_id} has no commit since the refuted verdict judged its tip {judged[:12]}, "
+            "so the fix round has nothing to read. Next: send the unit's coder its FIX message "
+            "again; a fix pass ends in a commit."
+        )
+    if workspace._run(repo, "merge-base", "--is-ancestor", judged, now).returncode != 0:
+        raise RunnerError(
+            f"the tip {judged[:12]} the refuted verdict judged is not an ancestor of unit "
+            f"{unit_id}'s tip {now[:12]}, so its branch was rewritten. Next: stop the run with "
+            "this line as the reason; the operator decides how the unit is judged again."
+        )
+    return [f"{RANGE_PREFIX}{judged}..{now}", *_refuted_places(repo, state, unit, key)]
+
+
+def round_lines(cwd: Path, unit_id: str, tip: str) -> Outcome:
+    # 0278: read only; a refusal leaves the state as it was.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        try:
+            return _round_lines(repo, train_id, unit_id, tip)
+        except workspace.WorkspaceError as exc:
+            raise RunnerError(str(exc)) from exc
+
+    return _with_next(_recorded(cwd, edit), "assets")
 
 
 # 0230: the build step 4 class list; a folder entry ends in a slash.
