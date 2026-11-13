@@ -456,6 +456,48 @@ def test_lock_revise_rewrites_open_briefs_and_leaves_merged_ones(repo: Path) -> 
     assert merged_brief.read_text().startswith(f"{old}\n")
 
 
+def test_lock_revise_rewrites_the_docs_brief_while_the_docs_unit_is_open(repo: Path) -> None:
+    # issue 325: the docs unit's brief is briefs/docs.md, not briefs/docstage.md.
+    train = _locked_train(repo)
+    _unit(repo, train, "docstage")
+    brief = _brief(repo, train, train_runner.DOCS_BRIEF, _contract_line(repo))
+    _contract(repo, text=V2)
+    lines = lock(repo, "contracts/api.md", 2)
+    assert lines[2:] == [f"brief refreshed: {brief} contract={_sha(V2)[:12]}"]
+    assert brief.read_text().startswith(f"{_contract_line(repo, V2)}\n")
+    _contract(repo, text="packet v3\n")
+    again = lock(repo, "contracts/api.md", 3)
+    assert again[2:] == [f"brief refreshed: {brief} contract={_sha('packet v3\n')[:12]}"]
+
+
+def test_lock_revise_without_a_docs_unit_ignores_a_docs_brief(repo: Path) -> None:
+    # issue 325: no docs unit recorded, so briefs/docs.md is not an open brief.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    old = _contract_line(repo)
+    docs = _brief(repo, train, train_runner.DOCS_BRIEF, old)
+    brief = _brief(repo, train, "u1.md", old)
+    _contract(repo, text=V2)
+    assert lock(repo, "contracts/api.md", 2)[2:] == [
+        f"brief refreshed: {brief} contract={_sha(V2)[:12]}"
+    ]
+    assert docs.read_text().startswith(f"{old}\n")
+
+
+def test_first_lock_after_a_skip_rewrites_a_contract_none_docs_brief(repo: Path) -> None:
+    # issue 325, 0261: a docs brief with Contract: none takes the packet line like any brief.
+    train = _train(repo)
+    train_state.update(repo, train, contract_skip=True)
+    lock(repo, None)
+    _unit(repo, train, "docstage")
+    brief = _brief(repo, train, train_runner.DOCS_BRIEF, "Contract: none")
+    path = _contract(repo)
+    lines = lock(repo, "contracts/api.md", 1)
+    assert lines[2:] == [f"brief refreshed: {brief} contract={_sha(V1)[:12]}"]
+    assert brief.read_text().startswith(f"{_contract_line(repo)}\n")
+    assert path.is_file()
+
+
 def test_lock_refresh_twice_rewrites_nothing_the_second_time(repo: Path) -> None:
     # 0261: a second revise over the same packet bytes finds every open brief current.
     train = _locked_train(repo)
