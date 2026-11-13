@@ -32,67 +32,81 @@ def test_release_step_finds_the_merge_commit_and_keeps_the_fallback_question() -
     text = _release()
     assert "ask for the merge commit sha on `<base branch>` and run" not in text
     assert "fetch origin <base branch>`" in text
-    assert "--grep='\\(#<pr number>\\)$'" in text
-    assert "whose second parent is the tip the releaser pushed" in text
+    assert "--grep=" not in text and "squash" not in text.lower()
+    assert "whose second parent is the tip the releaser pushed (0279, 0282)" in text
     assert "ask the operator for the merge commit sha on `<base branch>` instead" in text
 
 
-def _skill_log_commands(text: str) -> tuple[str, str]:
-    squash = re.search(r"`(git -C <repo> log origin/<base branch> -E --grep=[^`]+)`", text)
+def _skill_reads(text: str) -> tuple[str, str]:
     merge = re.search(r"`(git -C <repo> log origin/<base branch> --merges[^`]+)`", text)
-    assert squash and merge
-    return squash.group(1), merge.group(1)
+    ancestry = re.search(r"`(git merge-base --is-ancestor daedalus/<train-id> [^`]+)`", text)
+    assert merge and ancestry
+    return merge.group(1), ancestry.group(1)
 
 
-def test_release_reads_find_exactly_one_merge_commit(tmp_path: Path) -> None:
-    # 0252: run the skill's two git reads, as written, against a real squash and merge history.
+def _run_history(tmp_path: Path, name: str, squash: bool) -> tuple[Path, str, str]:
+    # 0279: a run branch of three commits merged into main by --no-ff or by a squash.
+    from tests.conftest import git
+
+    repo = tmp_path / name
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Start")
+    git(repo, "switch", "-q", "-c", "daedalus/20261112-120000")
+    for n in (1, 2, 3):
+        (repo / f"unit{n}.txt").write_text(f"unit {n}\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", f"Add unit {n}")
+    tip = git(repo, "rev-parse", "HEAD").stdout.strip()
+    git(repo, "switch", "-q", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Move main")
+    pr = "12"
+    if squash:
+        git(repo, "merge", "-q", "--squash", "daedalus/20261112-120000")
+        git(repo, "commit", "-q", "-m", f"Run 20261112-120000 (#{pr})")
+    else:
+        message = f"Merge pull request #{pr} from owner/daedalus/20261112-120000"
+        git(repo, "merge", "-q", "--no-ff", "daedalus/20261112-120000", "-m", message)
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return repo, tip, git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_release_reads_find_the_merge_commit_and_refuse_a_squash(tmp_path: Path) -> None:
+    # 0252, 0282: run the skill's reads, as written, against a real merge and squash history.
     import json
     import shlex
     import subprocess
     import sys
 
-    from tests.conftest import SCRIPTS_DIR, git
+    from tests.conftest import SCRIPTS_DIR
 
-    pr, other = "12", "14"
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init", "-q", "-b", "main")
-    git(repo, "commit", "-q", "--allow-empty", "-m", "Start")
-    git(repo, "commit", "-q", "--allow-empty", "-m", f"Mention (#{pr}) in the middle of a subject")
-    git(repo, "commit", "-q", "--allow-empty", "-m", f"Other change (#{pr}3)")
-    git(repo, "commit", "-q", "--allow-empty", "-m", f"Squashed feature (#{pr})")
-    git(repo, "switch", "-q", "-c", "unit")
-    git(repo, "commit", "-q", "--allow-empty", "-m", "Unit work")
-    tip = git(repo, "rev-parse", "HEAD").stdout.strip()
-    git(repo, "switch", "-q", "main")
-    git(repo, "merge", "-q", "--no-ff", "unit", "-m", f"Merge pull request #{pr}4 from unit")
-    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-    squash_sha = git(repo, "log", "--format=%H", "--grep=Squashed").stdout.strip()
-    merge_sha = git(repo, "rev-parse", "HEAD").stdout.strip()
-    squash_cmd, merge_cmd = _skill_log_commands(_release())
-    for command in (squash_cmd, merge_cmd):
-        payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(repo)}
-        payload["tool_input"] = {"command": command.replace("<repo>", str(repo))}
-        payload["session_id"] = "sess-main"
-        hook = subprocess.run(
-            [sys.executable, str(SCRIPTS_DIR / "enforce_agent_jail.py")],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            check=False,
-            cwd=repo,
-        )
-        assert hook.returncode == 0 and "daedalus-jail" not in hook.stderr, hook.stderr
+    merge_cmd, ancestry_cmd = _skill_reads(_release())
+    repo, tip, merge_sha = _run_history(tmp_path, "merged", squash=False)
+    payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(repo)}
+    payload["tool_input"] = {"command": merge_cmd.replace("<repo>", str(repo))}
+    payload["session_id"] = "sess-main"
+    hook = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "enforce_agent_jail.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=repo,
+    )
+    assert hook.returncode == 0 and "daedalus-jail" not in hook.stderr, hook.stderr
 
-    def run(command: str) -> list[str]:
-        argv = shlex.split(command.replace("<repo>", str(repo)).replace("<base branch>", "main"))
-        out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout
-        return out.split("\n")[:-1]
+    def run(root: Path, command: str) -> subprocess.CompletedProcess[str]:
+        filled = command.replace("<repo>", str(root)).replace("<base branch>", "main")
+        argv = shlex.split(filled.replace("<train-id>", "20261112-120000"))
+        return subprocess.run(argv, capture_output=True, text=True, check=False, cwd=root)
 
-    assert run(squash_cmd.replace("<pr number>", pr)) == [squash_sha]
-    assert run(squash_cmd.replace("<pr number>", other)) == []
-    merges = [line.split() for line in run(merge_cmd)]
+    merges = [line.split() for line in run(repo, merge_cmd).stdout.splitlines()]
     assert [m[0] for m in merges if len(m) > 2 and m[2] == tip] == [merge_sha]
+    assert run(repo, ancestry_cmd).returncode == 0
+    squashed, squash_tip, _ = _run_history(tmp_path, "squashed", squash=True)
+    merges = [line.split() for line in run(squashed, merge_cmd).stdout.splitlines()]
+    assert [m[0] for m in merges if len(m) > 2 and m[2] == squash_tip] == []
+    assert run(squashed, ancestry_cmd).returncode == 1
 
 
 def test_push_train_proof_names_the_exemption_path() -> None:
@@ -145,7 +159,13 @@ def test_push_train_ends_with_the_operator_checklist() -> None:
     for item in ("1. Review", "2. Check CI", "3. Merge"):
         assert item in hand_off, item
     # M2, issue 19: check the merge, leave the branch, then force-delete it from the own shell.
+    # 0279, 0282: the operator merges with a merge commit, and item 4 checks the run's ancestry.
+    item3 = hand_off.split("\n3. ", 1)[1].split("\n4. ", 1)[0]
+    assert item3.startswith("Merge the pull request with a merge commit")
+    assert "rebase" not in item3 and "squash" not in item3.lower()
     item4 = hand_off.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
+    assert "the run's commits are not on `<base branch>`" in item4
+    assert "Daedalus expects one. Next:" in item4
     assert item4.startswith(
         "Check that the pull request is merged with `gh pr view <url> --json state`"
     )
@@ -171,6 +191,11 @@ def test_push_skill_hand_off_names_the_release_step() -> None:
     # 130: a plain-branch merge names its pull request body file instead of a summary.
     assert RELEASE_CMD.replace("<merge sha>`", "<merge sha> --notes-file <body file>`") in hand_off
     assert "docs/.tmp/daedalus/releases/v<version>/release-notes.md" in hand_off
+    # 0282: the plain path has no run tip, so it checks only that the sha is on the base.
+    assert (
+        "This path checks only that the sha is on the base branch, because a plain branch has "
+        "no recorded run tip."
+    ) in hand_off
     assert "After the operator reports the merge" in hand_off
     assert "`Version class: <version> <X, Y or Z>: <one-line reason>`" in hand_off
     assert "`Migration: <what an operator edits>`" in hand_off

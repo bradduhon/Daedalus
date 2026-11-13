@@ -61,6 +61,8 @@ The kinds:
    those and nothing more, then reply with every claim of the document as it now stands.
 5. **Never push, never recommend**: never `git push` and never `gh`. A kind that commits names
    its git commands; Commit messages carry no Co-Authored-By or other attribution trailer.
+   Every commit lands on the default branch as written (0279), so each is complete and its
+   message stands alone: imperative, says what changed, never "wip" or "fix review".
    Where a source or the brief leaves a choice, carry both readings or tag the line
    `[judgment: <one line>]`; never resolve it for the operator.
 6. **Shell**: No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`) in any command; the Bash

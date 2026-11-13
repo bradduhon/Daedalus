@@ -89,7 +89,7 @@ If your project is a plain folder and not a git repository, Daedalus works in fo
 1. See what Daedalus has. Type `/daedalus:catalog` once. It prints a list of the agents and the seven phases.
 2. Start a run. Type `/daedalus:run` and your task in your own words, for example `/daedalus:run Add a --verbose flag to the command-line tool`. A one-line task needs no file, because the run saves the words you type as the spec. With only an idea and no spec, type `/daedalus:brainstorm` and the idea, or the path of a notes file. First it talks the idea through with you and offers other ways to see it. When you pick a direction, it shows you a short brief of what you chose. Then it asks you one question at a time. Each question comes with a proposal you can accept, or you type your own answer. It writes the design when you say it stands. The [operator guide](docs/howto/README.md) shows how to turn an idea into a spec and how to split a spec into units before you build.
 3. Answer its questions. The run works on its own and stops only when it needs you. Each question arrives in Claude Code's question prompt, with the recommended answer first. When the security audit finds a problem, you get one question per problem with three choices: `Fix it now (Recommended)`, `Skip, track or exempt it` or `Stop the run`.
-4. Merge the pull request. When the run ends, you can read what every agent did with `/daedalus:audit-report <session>`. Type `/daedalus:run push` to push the branch and open its pull request. Review the pull request and merge it yourself. Daedalus never merges.
+4. Merge the pull request. When the run ends, you can read what every agent did with `/daedalus:audit-report <session>`. Type `/daedalus:run push` to push the branch and open its pull request. Review the pull request and merge it yourself with a merge commit. Daedalus never merges.
 
 ## Runs and reports
 
@@ -136,7 +136,7 @@ It first checks that the build run's audit log holds an approved security verdic
 
 The push agent, the releaser, pushes the branch and watches CI. The pull request body is the build run's summary, with one line per issue the summary names. An issue named with a GitHub closing word, such as `Closes #<n>` or `Fixes #<n>`, gets a `Closes #<n>` line, so merging the pull request closes it. Every other mention, partial work included, gets a `Refs #<n>` line and stays open. If the build run used a branch in your Charter repository, the push agent also pushes that branch and opens its pull request after the code one. The Charter is a separate repository for your decisions and specs, named by the `local_docs_folder` setting. If a commit landed on the train's branch after the audit, the push run adds one recovery audit round on the new tip before it pushes.
 
-You review and merge. Once `gh pr view <url> --json state` shows the merge, delete the train branch from your own shell with `git branch -D daedalus/<train-id>`.
+You review and merge. Merge with a merge commit, never a squash or a rebase merge. A merge commit lands every commit of the run on your default branch as written, and the release step checks that the run's commits are there. Once `gh pr view <url> --json state` shows the merge, delete the train branch from your own shell with `git branch -D daedalus/<train-id>`.
 
 ### Execution Train
 
