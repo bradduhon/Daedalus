@@ -1811,6 +1811,23 @@ def test_merge_refuses_a_unit_completed_against_an_older_contract(repo: Path) ->
     assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
 
 
+def test_merge_refuses_with_its_own_next_step_when_the_contract_file_is_gone(repo: Path) -> None:
+    # issue 325: the unreadable-contract refusal names the merge's next step, not "step again".
+    train, u1, _ = _wave_train(repo)
+    _completed(repo, train, "u1", f"contract={_sha(V1)[:12]}")
+    path = repo / "contracts" / "api.md"
+    path.unlink()
+    _dispatch(repo, u1)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
+    with pytest.raises(WorkspaceError) as info:
+        workspace.merge(repo, ["U1"])
+    assert str(info.value) == (
+        f"unit U1 cannot be compared with its contract: {path} could not be read. "
+        f"Next: restore the contract file at {path}, then rerun the merge."
+    )
+    assert u1.exists() and _merges(repo, f"daedalus/{train}") == []
+
+
 def test_finish_refuses_a_complete_line_with_no_contract_field(repo: Path) -> None:
     # 0271: a locked contract with contract=none or no field on the line is a mismatch.
     train = _locked_train(repo)

@@ -1024,8 +1024,12 @@ def completion_contract_refusal(
     ]
     try:
         current = _sha256(_read_packet(Path(contract), "Locked Contract Packet"))[:12]
-    except RunnerError as exc:
-        return str(exc)
+    except RunnerError:
+        # issue 325: the packet reader's next step is the step command's, not the merge's.
+        return (
+            f"unit {uid} cannot be compared with its contract: {contract} could not be read. "
+            f"Next: restore the contract file at {contract}, then rerun the merge."
+        )
     if not done:
         return (
             f"unit {uid} has no coder COMPLETE line for branch {branch} in this session's audit "
