@@ -1040,11 +1040,13 @@ def finish(repo: Path) -> list[str]:
         if _run(repo, "merge-base", "--is-ancestor", str(unit["branch"]), integration).returncode
     ]
     records = _audit_records(repo, state) if pending else []
+    told: list[str] = []
     for unit in pending:
-        require_verified(repo, train_id, records, unit, _unit_label(train_id, str(unit["name"])))
-        require_contract(train_id, state, records, unit, _unit_label(train_id, str(unit["name"])))
+        label = _unit_label(train_id, str(unit["name"]))
+        told += require_verified(repo, train_id, records, unit, label)
+        require_contract(train_id, state, records, unit, label)
     _git(repo, "switch", "-q", integration)
-    lines = _merge_all(repo, state, train_id, merging)
+    lines = [*_merge_all(repo, state, train_id, merging), *told]
     _finished(repo, train_id, merging)
     _record(repo, train_id, merged=True)
     nexts: list[str] = []
@@ -1323,7 +1325,7 @@ def _recorded_plan(state: dict[str, object]) -> plan_record.Plan:
 
 
 def _wave(
-    repo: Path, train_id: str, state: dict[str, object], ids: list[str]
+    repo: Path, train_id: str, state: dict[str, object], ids: list[str], told: list[str]
 ) -> list[dict[str, object]]:
     named = _plan_ids(state)
     recorded = {
@@ -1345,10 +1347,15 @@ def _wave(
                 "Next: create the unit worktree with daedalus_workspace.py create first."
             )
         records = _audit_records(repo, state) if records is None else records
-        require_verified(repo, train_id, records, unit, uid)
+        told += require_verified(repo, train_id, records, unit, uid)
         require_contract(train_id, state, records, unit, uid)
         wave.append(unit)
     return wave
+
+
+# 77: unit record {"<VERIFIED reply seq>": "<unit branch tip at the route call>"}, route only.
+VERIFIED_TIPS = "verified_tips"
+NO_TIP = "no judged tip: "
 
 
 def require_verified(
@@ -1357,7 +1364,7 @@ def require_verified(
     records: list[dict[str, object]],
     unit: dict[str, object],
     uid: str,
-) -> None:
+) -> list[str]:
     # 234: the one verdict gate merge and finish share; an exemption binds to the unit tip.
     exempt = train_state.record(unit, UNIT_EXEMPTIONS)
     tip = unit_tip(repo, unit) if exempt else None
@@ -1367,6 +1374,30 @@ def require_verified(
             f"unit {uid} has no recorded verifier verdict {VERIFIED} for its worktree "
             f"{unit['path']}. Next: {VERIFY_NEXT}"
         )
+    return _judged_tip(repo, records, unit, uid)
+
+
+def _judged_tip(
+    repo: Path, records: list[dict[str, object]], unit: dict[str, object], uid: str
+) -> list[str]:
+    # 77: a VERIFIED reply counts for the tip route recorded with it; none recorded is told.
+    reply = newest_verdict(records, Path(str(unit["path"])))
+    if reply is None or VERIFIED_LINE.fullmatch(reply[1]) is None:
+        return []
+    seq, now = reply[0], unit_tip(repo, unit)
+    judged = train_state.record(unit, VERIFIED_TIPS).get(str(seq))
+    if not isinstance(judged, str):
+        return [
+            f"{NO_TIP}unit {uid} merged on its VERIFIED reply at seq {seq} with no judged tip on "
+            f"record, as in a run recorded before issue 77. Its tip {now[:12]} was not compared."
+        ]
+    if judged != now:
+        raise WorkspaceError(
+            f"unit {uid}'s branch moved to {now[:12]} after its VERIFIED reply at seq {seq} "
+            f"judged {judged[:12]}, so no verifier read the newer commits. Next: dispatch the "
+            "verifier on the unit worktree again, route its verdict, then rerun the merge."
+        )
+    return []
 
 
 def require_contract(
@@ -1406,7 +1437,8 @@ def merge(repo: Path, ids: list[str]) -> list[str]:
             "--units names no unit or one unit twice. "
             "Next: pass each unit id once, comma-separated."
         )
-    wave = _wave(repo, train_id, state, ids)
+    told: list[str] = []
+    wave = _wave(repo, train_id, state, ids, told)
     dirty = _uncommitted(repo, _admitted(state))
     if dirty:
         raise WorkspaceError(
@@ -1425,8 +1457,11 @@ def merge(repo: Path, ids: list[str]) -> list[str]:
                 f"Unit {unit['branch']} does not descend from the integration branch. "
                 "Next: rerun the train; if it repeats, file an issue with the train summary."
             )
+    # 126: the skipped-contract limit finish applies, judged over the same units before a merge.
+    merging = [u for u in train_state.units(state) if not train_state.is_audit_unit(u)]
+    _skip_scope(repo, state, merging, str(lock_sha), integration)
     _on_branch(repo, integration)
-    lines = _merge_all(repo, state, train_id, wave)
+    lines = [*_merge_all(repo, state, train_id, wave), *told]
     _finished(repo, train_id, wave)
     nexts: list[str] = []
     if not _teardown(repo, wave, lines, nexts):

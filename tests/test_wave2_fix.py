@@ -35,6 +35,7 @@ from tests.test_docs_stage import (
     _commit,
     _exempted_security,
     _train,
+    verified_docs,
 )
 from tests.test_persona_jails import _bound_writer, _dispatch, _writer, trees
 from tests.test_train_runner import _integration, _state
@@ -162,8 +163,8 @@ def test_public_docs_writer_commit_takes_only_a_message(
 # Requirement 4: a docs-only commit keeps each doc a regular non-executable file.
 
 
-def _verified_at(repo: Path, tip: str) -> None:
-    train_state.update(repo, _train(repo), docs_verdict={"status": "verified", "tip": tip})
+def _verified_at(repo: Path, tip: str, head: str | None = None) -> None:
+    verified_docs(repo, tip, head)
 
 
 @pytest.mark.parametrize("change", ["executable", "symlink", "gitlink"])
@@ -290,7 +291,7 @@ def test_the_no_ff_docs_merge_onto_the_judged_tip_still_passes(repo: Path, plugi
     side = _commit(repo, "docs/howto/README.md")
     _git(repo, "reset", "-q", "--hard", judged)
     merged = _merge(repo, judged, side, "README.md")
-    _verified_at(repo, merged)
+    _verified_at(repo, merged, side)
     assert audit_proof.tip_admits(repo, train, _state(repo), judged, merged) is None
     assert push_proof(repo, train).endswith(f"docs verified on tip {merged[:12]}")
 
