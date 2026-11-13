@@ -3,6 +3,7 @@
 # spec 3.3: links into a credential store, onto the reply key, onto claude, out of a worktree.
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from tests.adversarial.corpus import (
     assert_denied,
     assert_store_read_denied,
 )
+from tests.handoff_cases import assert_refused, check, make_case
 from tests.jail_cases import _unit_repo
 from tests.payloads import _b, _cred, _cwd, _w
 from tests.test_checks_credential_paths import _bash_in, _key_repo
@@ -163,3 +165,27 @@ def test_planner_link_out_of_a_folder_runs_output_folder_is_denied(
     for path in (f"{out}/plan-link.md", f"{out}/brainstorm-link/spec.md"):
         write = _cred("planner", "Write", str(root), file_path=path, content="x")
         assert_denied(write, "is outside the repository. Next: write under")
+
+
+def test_a_handoff_write_through_a_link_is_denied_past_the_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 0284: a linked parent names another path; a link or FIFO at the leaf refuses the real one.
+    case = make_case(tmp_path, monkeypatch)
+    h = case.handoff()
+    h.parent.mkdir(parents=True)
+    (tmp_path / "parent-link").symlink_to(h.parent)
+    write = {"file_path": str(tmp_path / "parent-link" / h.name), "content": "x"}
+    assert_refused(check(case.payload("coder", "Write", write)))
+    for plant in ("link", "fifo", "folder"):
+        if plant == "link":
+            h.symlink_to(tmp_path / "elsewhere.md")
+        elif plant == "fifo":
+            os.mkfifo(h)
+        else:
+            h.mkdir()
+        assert_refused(check(case.payload("coder", "Write", {"file_path": str(h), "content": "x"})))
+        if plant == "folder":
+            h.rmdir()
+        else:
+            h.unlink()

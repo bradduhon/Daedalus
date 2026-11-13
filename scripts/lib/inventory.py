@@ -393,6 +393,12 @@ FILES: tuple[Entry, ...] = (
         "line, the sha256 of the reply's last line, mode 0600",
     ),
     Entry(
+        "/tmp/.daedalus/<uid>/handoffs/<project key>/",
+        "scripts/lib/storage.py:make_tmp_dir",
+        "the jail admits the hand-off write of an agent past the context limit during a run; "
+        "the agent itself writes <agent id>.md there with its Write tool",
+    ),
+    Entry(
         "/tmp/.daedalus/<uid>/settings-backup/<project key>/<file>-<16 hex>.json",
         "scripts/daedalus_setup.py:_write_backup",
         "you agree in /daedalus:setup to replace a settings file from an older version; a "

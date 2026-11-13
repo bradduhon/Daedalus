@@ -45,7 +45,7 @@ from lib.manifest import (
     TEXT_MAX,
     TOP_KEYS,
 )
-from lib.operator_file import GUIDANCE_SOURCES, MAIN_REFUSAL_CLASSES, OPERATOR_FILE
+from lib.operator_file import CONTEXT_LIMIT, GUIDANCE_SOURCES, MAIN_REFUSAL_CLASSES, OPERATOR_FILE
 from lib.operator_file import TOP_KEYS as OPERATOR_TOP_KEYS
 from lib.settings_maps import SCHEMA_KEY, current
 from lib.work_classes import (
@@ -662,8 +662,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`{}`: the personal file's values stand",
         '`{"reading_level": "expert"}`',
         "Daedalus reads this project's copy of the Self-Assessment and Developer Profile "
-        "switches, the work classes and the class mapping, and checks and keeps the rest for "
-        "later.",
+        "switches, the work classes, the class mapping and the context limit, and checks and "
+        "keeps the rest for later.",
         ("scripts/lib/config.py", "scripts/lib/operator_file.py"),
     ),
     (CONFIG_FILE, "models.agents"): KeyRow(
@@ -863,6 +863,18 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "maps to.",
         ("scripts/lib/work_classes.py", "scripts/lib/train_runner.py"),
     ),
+    (OPERATOR_FILE_NAME, "context_limit"): KeyRow(
+        "How many tokens a Daedalus agent's context may hold during a run. Past it the agent "
+        "may only write its hand-off and hand back. A project's config may set its own value "
+        "under `personal_overrides`",
+        "integer or null",
+        "A whole number of tokens, 0 or more, or `null`; `0` and `null` turn the check off; a "
+        "negative number, a fraction, `true`, `false` or a string is refused",
+        f"`{CONTEXT_LIMIT}`: an agent past {CONTEXT_LIMIT:,} tokens stops and hands off",
+        "`400000`",
+        "During a run, an agent whose context grows past the limit stops and hands its work on.",
+        ("scripts/lib/handoff.py",),
+    ),
 }
 
 
@@ -926,6 +938,7 @@ def starter_operator() -> dict[str, object]:
         # 0270: the shipped classes and mapping, written out so the user edits them in place.
         "work_classes": classes_json(),
         "class_models": models_json(),
+        "context_limit": CONTEXT_LIMIT,
     }
 
 
@@ -1191,17 +1204,18 @@ OVERLAPS: tuple[Overlap, ...] = (
         "A project's config can hold its own copy of any personal preference. A value set "
         "there replaces your personal value for that project only, and the rest still come "
         "from your personal file. Today Daedalus reads the project's copy of the "
-        "Self-Assessment and Developer Profile switches, the work classes and the class mapping; "
-        "nothing acts yet on the project's copy of any other value.",
+        "Self-Assessment and Developer Profile switches, the work classes, the class mapping "
+        "and the context limit; nothing acts yet on the project's copy of any other value.",
         (
             (
                 "scripts/lib/operator_file.py",
-                226,
+                238,
                 "a key the override sets replaces the base value",
             ),
             ("scripts/lib/train_runner.py", 1523, "operator = operator_file.load(repo)"),
             ("scripts/lib/self_assessment.py", 49, "load(project_root(Path(path)))"),
             ("scripts/lib/developer_profile.py", 51, "load(project_root(Path(repo_root)))"),
+            ("scripts/lib/handoff.py", 103, "overlay(load_user(), config.operator).context_limit"),
         ),
         "config",
     ),

@@ -234,6 +234,9 @@ Your reply ends with exactly one of these, nothing after it.
 - `[STATUS: SPEC] n=<n> path=<path> open=<m>`
 - `[STATUS: NOT_VIABLE] n=<n> <the blocking fact in one line>`
 - `[STATUS: YIELD_WEB] <query>`
+- `[STATUS: HANDOFF] path=<path>` when the context limit stops the work.
 
 Plan mode ends with PLAN, QUESTION or YIELD_WEB; challenge mode ends with ASK, SPEC, NOT_VIABLE or YIELD_WEB, and every question it asks is an ASK.
 On SPEC and NOT_VIABLE, `n` is the number of the last question asked.
+
+If a call is refused because the context is past its limit, stop the work. Write the hand-off to the path the refusal names with the Write tool, holding what is done, what is left, the files touched, the next step and any open question. Then hand back with the last line `[STATUS: HANDOFF] path=<path>`, nothing after it.

@@ -66,3 +66,6 @@ per group, the `Claim:` lines, and a tick list proving every `substituted` and `
 the drafting log has a change-log row.
 - `[STATUS: COMPLETE] change_log=<path> rows=<n> open=<k>`
 - `[STATUS: BLOCKED] <what the manifest or brief leaves out>`
+- `[STATUS: HANDOFF] path=<path>` when the context limit stops the work.
+
+If a call is refused because the context is past its limit, stop the work. Write the hand-off to the path the refusal names with the Write tool, holding what is done, what is left, the files touched, the next step and any open question. Then hand back with the last line `[STATUS: HANDOFF] path=<path>`, nothing after it.

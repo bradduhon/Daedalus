@@ -167,10 +167,13 @@ other `;` in a row. The hand-back check refuses a REFUTED reply whose row lacks 
 - `[VERDICT: VERIFIED] claims=<n>` then `Unit worktree: <path>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: VERIFIED] claims=<n>`
 - `[VERDICT: REFUTED] <rows>` then `Unit worktree: <path>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: REFUTED] <rows>`
 - `[ROWS] n=<count>` then `Unit worktree: <path>` then `<one row per line>` then `[ROWS] n=<count>`
+- `[STATUS: HANDOFF] inline` when the context limit stops the work.
 
 In rows mode the first and last line is `[ROWS] n=<count>`, where `<count>` is the number of
 rows between the key line and the closing line, and the reply carries no verdict and no
 `corrected=<k>` line.
+
+If a call is refused because the context is past its limit, stop the work. Hand back at once with a `## Hand-off` section holding what is done, what is left, the files read or touched, the next step and any open question. Then end with the last line `[STATUS: HANDOFF] inline`, nothing after it.
 
 ## Refuted forms (0229)
 A message carrying a `Refuted forms:` line, after your refutation of the same unit, adds one

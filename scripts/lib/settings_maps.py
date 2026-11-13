@@ -92,7 +92,7 @@ CONVERTERS: dict[str, Callable[[object], object]] = {}
 FINGERPRINTS: dict[str, dict[int, str]] = {
     "manifest": {1: "88107e513568dbdc04c4a82e139cafa545a53f1d11d7c0152cce403173d98e80"},
     "config": {1: "bdc56bcde7810f1a4ecf06bff5dd033f03b5621cde6ba2c5bc097d426a6bd1a0"},
-    "operator": {1: "320b41238a3e01eaa26c6eb4b791635c0b8cc52f66d3dfe0048dfeb9e8a30066"},
+    "operator": {1: "a5b85ce22acd72d92f91f9329d827ab68cc08a9953472701b03d40511c852a7b"},
 }
 
 
