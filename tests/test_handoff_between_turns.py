@@ -134,9 +134,58 @@ def test_a_return_records_the_measured_size_on_the_unit(
     out = _return(monkeypatch, capsys, root, OLD, YIELD, "coder", _transcript(OLD, 1234))
     assert "block" not in out
     assert _unit(root)[train_state.SIZES] == {OLD: {"tokens": 1234}}
-    # A later return replaces the size; the newest is kept.
+    # A larger later return replaces the size.
+    _return(monkeypatch, capsys, root, OLD, YIELD, "coder", _transcript(OLD, 5000))
+    assert _unit(root)[train_state.SIZES] == {OLD: {"tokens": 5000}}
+
+
+@pytest.mark.usefixtures("tmp_root")
+def test_a_smaller_later_measurement_keeps_the_larger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _bound(tmp_path)
+    _return(monkeypatch, capsys, root, OLD, YIELD, "coder", _transcript(OLD, PAST))
     _return(monkeypatch, capsys, root, OLD, YIELD, "coder", _transcript(OLD, 99))
-    assert _unit(root)[train_state.SIZES] == {OLD: {"tokens": 99}}
+    assert _unit(root)[train_state.SIZES] == {OLD: {"tokens": PAST}}
+    _refused(train_runner.dispatch_unit(root, "U1", OLD), "past the context limit")
+
+
+@pytest.mark.usefixtures("tmp_root")
+def test_an_unmeasured_first_return_then_a_measured_one_stores_the_tokens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _bound(tmp_path)
+    _return(monkeypatch, capsys, root, OLD, YIELD)
+    assert _unit(root)[train_state.SIZES] == {OLD: {"reason": "path not derivable"}}
+    _return(monkeypatch, capsys, root, OLD, YIELD, "coder", _transcript(OLD, 77))
+    assert _unit(root)[train_state.SIZES] == {OLD: {"tokens": 77}}
+
+
+@pytest.mark.usefixtures("tmp_root")
+def test_a_stop_with_no_transcript_after_a_measured_handback_keeps_the_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _bound(tmp_path)
+    path = _path_handoff(root, OLD)
+    reply = f"Notes.\n[STATUS: HANDOFF] path={path}"
+    _return(monkeypatch, capsys, root, OLD, reply, "coder", _transcript(OLD, PAST))
+    # The stop that follows the hand-back carries the same reply and no transcript path.
+    payload: dict[str, object] = {
+        "hook_event_name": "SubagentStop",
+        "session_id": SESSION,
+        "cwd": str(root),
+        "agent_id": OLD,
+        "agent_type": "daedalus:coder",
+        "last_assistant_message": reply,
+    }
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    assert handback_check.main() == 0
+    assert "block" not in capsys.readouterr().out
+    cell = {"tokens": PAST, "reason": "path not derivable"}
+    assert _unit(root)[train_state.SIZES] == {OLD: cell}
+    assert _unit(root)[train_state.HANDOFFS][0]["tokens"] == PAST
+    code, out = _cli(root, "dispatch", "--unit", "U1", "--warm", OLD)
+    assert code == 1 and f"recorded {PAST} tokens" in out, out
 
 
 @pytest.mark.usefixtures("tmp_root")

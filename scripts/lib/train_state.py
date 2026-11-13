@@ -308,6 +308,21 @@ def _add_handoff(
     return True
 
 
+def _tokens(cell: object) -> int | None:
+    tokens = cell.get("tokens") if isinstance(cell, dict) else None
+    return tokens if isinstance(tokens, int) and not isinstance(tokens, bool) else None
+
+
+def _kept_size(old: object, new: dict[str, object]) -> dict[str, object]:
+    # 0284: a context only grows between returns; unmeasured keeps tokens, a smaller one never wins.
+    prior, now = _tokens(old), _tokens(new)
+    if prior is None:
+        return new
+    if now is not None:
+        return {"tokens": max(prior, now)}
+    return {"tokens": prior, "reason": new.get("reason")}
+
+
 def record_return(
     repo: Path,
     train_id: str,
@@ -327,14 +342,16 @@ def record_return(
                 entries[-1]["unit"] = None
                 state[HANDOFFS] = entries
             return
-        sizes = unit.get(SIZES)
-        unit[SIZES] = {**(sizes if isinstance(sizes, dict) else {}), agent: size}
+        held = unit.get(SIZES)
+        sizes = dict(held) if isinstance(held, dict) else {}
+        merged = _kept_size(sizes.get(agent), size)
+        unit[SIZES] = {**sizes, agent: merged}
         entries = _handoff_entries(unit)
         # 0284: a later agent returning on the unit is the new agent of its open hand-off.
         open_ = [e for e in entries if e.get("new") is None and e.get("old") != agent]
         if open_ and not any(e.get("old") == agent for e in entries):
             open_[-1]["new"] = agent
-        _add_handoff(entries, agent, size, file)
+        _add_handoff(entries, agent, merged, file)
         if entries:
             unit[HANDOFFS] = entries
 
