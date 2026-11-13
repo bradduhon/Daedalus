@@ -412,9 +412,10 @@ def test_the_read_line_and_the_full_diff_carry_the_asset_tail() -> None:
     # 0192: the session prints the tail once; the Read line and the verifier's diff copy it.
     step = flatten(VERIFY_SKILL.read_text(encoding="utf-8"))
     assert (
-        "first run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py assets --repo <repo> "
-        "--base <lock sha> --tip <b> --unit <unit id>`" in step
+        "run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py assets --repo <repo> "
+        "--base <lock sha> --tip <b> --unit <unit id> --map`" in step
     )
+    assert "Asset exclusion (0192): the step 2 call printed the asset lines." in step
     assert (
         "With a tail, the `-U0` command below ends with it, copied exactly, so no asset file "
         "reaches the `Read:` or `Open:` line." in step
