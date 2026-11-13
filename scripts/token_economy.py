@@ -281,6 +281,38 @@ def label_of(agent_type: str, prompt: str) -> str | None:
     return None
 
 
+def role_label(agent_type: str, unit: str | None, number: int | None = None) -> str:
+    # One name for an agent: its role, then its unit or round, else its start number.
+    parts = [agent_type.removeprefix(PREFIX), unit or (str(number) if number else None)]
+    return " ".join(p for p in parts if p)
+
+
+def agent_labels(session: str, root: Path, records: list[dict[str, object]]) -> dict[str, str]:
+    # Agent id to role label for the audit report; a role with no unit numbers by first start.
+    try:
+        runs, _ = session_runs(session, root, records)
+    except (OSError, UnicodeDecodeError):
+        runs = []
+    units: dict[str, str] = {}
+    for run in _merge(runs):
+        for row in run.rows:
+            if row.label and run.run_type != SESSION:
+                units.setdefault(row.agent_id, row.label)
+    started: dict[str, str] = {}
+    for rec in records:
+        if rec.get("event") in ("SubagentStart", "SubagentStop") and rec.get("agent_id"):
+            started.setdefault(str(rec["agent_id"]), str(rec.get("agent_type")))
+    bare: dict[str, list[str]] = {}
+    for agent_id, agent_type in started.items():
+        if agent_id not in units:
+            bare.setdefault(agent_type, []).append(agent_id)
+    labels = {i: role_label(started[i], unit) for i, unit in units.items() if i in started}
+    for agent_type, ids in bare.items():
+        for n, agent_id in enumerate(ids, 1):
+            labels[agent_id] = role_label(agent_type, None, n if len(ids) > 1 else None)
+    return labels
+
+
 def model_word(raw: object) -> str | None:
     # 0187: a transcript model id reads as its model word; a synthetic or absent id as none.
     if not isinstance(raw, str) or not raw or raw.startswith("<"):

@@ -21,6 +21,7 @@ from lib.project_keys import (
 )
 
 from tests.conftest import REPO_ROOT
+from tests.regen_key_table import REGENERATE_COMMAND, write_readme_table
 
 BEGIN = "<!-- key reference -->"
 END = "<!-- end key reference -->"
@@ -55,7 +56,19 @@ def _reader_pairs() -> set[tuple[str, str]]:
 
 def test_readme_key_reference_is_the_generated_table() -> None:
     # B7: the README carries reference_table() verbatim between its markers.
-    assert _block().strip("\n") == reference_table().strip("\n")
+    assert _block().strip("\n") == reference_table().strip("\n"), (
+        f"the README key table is stale; from the repository root run: {REGENERATE_COMMAND}"
+    )
+
+
+def test_regenerate_command_rewrites_the_table(tmp_path: Path) -> None:
+    # 0245: a stale table is repaired by the command the failure message names.
+    readme = tmp_path / "README.md"
+    readme.write_text(f"intro\n{BEGIN}\nold\n{END}\noutro\n", encoding="utf-8")
+    assert write_readme_table(readme) is True
+    assert write_readme_table(readme) is False
+    text = readme.read_text(encoding="utf-8")
+    assert text == f"intro\n{BEGIN}\n{reference_table()}{END}\noutro\n"
 
 
 def test_every_reader_key_has_a_generator_row() -> None:
@@ -92,7 +105,7 @@ def test_models_agents_row_names_the_catalog_models() -> None:
     models = KEY_ROWS[(CONFIG_FILE, "models.agents")]
     assert models.kind == "object" and models.default.startswith("`{}`") and models.override
     assert '`"sonnet"`, `"opus"`, `"haiku"` or `"fable"`' in models.values
-    # 0187: inside a run models.coder sets the coder, so the example names another agent.
+    # 0187: inside a run a unit's class sets the coder, so the example names another agent.
     assert models.example == '`{"planner": "sonnet"}`'
 
 

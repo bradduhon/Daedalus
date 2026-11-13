@@ -2004,6 +2004,66 @@ def test_a_resumed_run_refuses_a_unit_whose_line_is_in_an_earlier_session(repo: 
     assert str(info.value) == _no_line_message(repo, train, "u1")
 
 
+def _resumed_session(repo: Path, train: str, unit: Path) -> None:
+    # 324: a new audit session holding only a fresh verifier verdict for the unit.
+    from lib import audit
+
+    later = "sess-resumed"
+    train_state.update(repo, train, audit_session=later)
+    text = f"Check every claim.\nUnit worktree: {unit}\nReply with the verdict line."
+    for fields in (
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_input": {"subagent_type": "daedalus:verifier", "prompt": text},
+            "tool_use_id": "toolu_resumed",
+        },
+        {
+            "hook_event_name": "SubagentStop",
+            "agent_id": "agent-verifier",
+            "agent_type": "daedalus:verifier",
+            "last_assistant_message": keyed(VERIFIED_REPLY, unit),
+        },
+    ):
+        audit.audit_append({"session_id": later, "cwd": str(repo), **fields})
+
+
+def test_a_resumed_run_merges_a_unit_from_the_completion_the_route_call_recorded(
+    repo: Path,
+) -> None:
+    # 324: the route call keeps the COMPLETE values on the unit; a new session needs no new line.
+    train, u1, _ = _model_train(repo)
+    _completed(repo, train, "u1", f"contract={_sha(V1)[:12]}")
+    _dispatch(repo, u1)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
+    assert train_runner.route_unit(repo, "U1", "VERIFIED").code == 0
+    (unit,) = [
+        u for u in train_state.units(train_state.load(repo, train)) if u["name"] == f"{train}-u1"
+    ]
+    want = {
+        "branch": f"daedalus-unit/{train}-u1",
+        "contract": _sha(V1)[:12],
+        "standards": _sha("s")[:12],
+    }
+    assert train_state.record(unit, train_state.COMPLETION) == want
+    _resumed_session(repo, train, u1)
+    assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
+
+
+def test_a_recorded_completion_does_not_hide_a_contract_revised_since(repo: Path) -> None:
+    # 324: the merge still compares the recorded contract value with the contract's current hash.
+    train, u1, _ = _model_train(repo)
+    _completed(repo, train, "u1", f"contract={_sha(V1)[:12]}")
+    _dispatch(repo, u1)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
+    assert train_runner.route_unit(repo, "U1", "VERIFIED").code == 0
+    _contract(repo, text=V2)
+    lock(repo, "contracts/api.md", 2)
+    _resumed_session(repo, train, u1)
+    with pytest.raises(WorkspaceError, match=f"completed against contract={_sha(V1)[:12]}"):
+        workspace.merge(repo, ["U1"])
+
+
 def test_finish_passes_the_docs_unit_by_its_recorded_name(repo: Path) -> None:
     # 0271, 0134: the <train-id>-docstage unit has no coder, so no line is asked of it.
     train = _locked_train(repo)
@@ -2215,8 +2275,9 @@ def test_parallel_verifiers_each_answer_only_their_own_unit(
     records = workspace._audit_records(repo, train_state.load(repo, train))
     assert workspace.unit_verified(records, u1) is not u1_refuted
     assert workspace.unit_verified(records, u2) is u1_refuted
-    assert workspace.unit_refutations(records, u1) == int(u1_refuted)
-    assert workspace.unit_refutations(records, u2) == int(not u1_refuted)
+    for unit, refuted in ((u1, u1_refuted), (u2, not u1_refuted)):
+        verdict = workspace.newest_verdict(records, unit)
+        assert verdict is not None and verdict[1].startswith("[VERDICT: REFUTED]") is refuted
 
 
 @pytest.mark.parametrize("key", [None, "third"], ids=["no-key-line", "third-worktree"])
@@ -2247,7 +2308,6 @@ def test_a_fix_pass_reply_keyed_to_u1_is_u1s_newest_past_u2s_dispatch(repo: Path
     _verifier_handback(repo, VERIFIED_REPLY, u1, agent_id="agent-v1")
     records = workspace._audit_records(repo, train_state.load(repo, train))
     assert workspace.unit_verified(records, u1) is True
-    assert workspace.unit_refutations(records, u1) == 1
     assert workspace.newest_reply(records, u2) is None
 
 
@@ -2275,7 +2335,6 @@ def test_a_rows_mode_reply_keyed_to_u1_is_not_a_verdict(repo: Path) -> None:
     assert reply is not None and reply[1] is None
     assert workspace.newest_verdict(records, u1) is None
     assert workspace.unit_verified(records, u1) is False
-    assert workspace.unit_refutations(records, u1) == 0
 
 
 @pytest.mark.parametrize(
@@ -2527,6 +2586,34 @@ def test_folder_begin_refuses_an_output_it_may_not_use(
     _nothing_written(plain)
 
 
+@pytest.mark.parametrize("where", ["root", "below", "new-below", "above"])
+def test_folder_begin_refuses_an_output_on_the_plugins_temporary_root(
+    plain: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    # 327: --out that is, sits inside or holds the temporary root is refused with its Next line.
+    from lib import storage
+
+    holder = tmp_path.resolve() / "holder"
+    tmp_root = holder / "plugin-tmp"
+    (tmp_root / "feature").mkdir(parents=True)
+    monkeypatch.setattr(storage, "TMP_ROOT", tmp_root)
+    monkeypatch.setattr(workspace, "TMP_ROOT", tmp_path.resolve())
+    out = {
+        "root": tmp_root,
+        "below": tmp_root / "feature",
+        "new-below": tmp_root / "feature" / "new",
+        "above": holder,
+    }[where]
+    with pytest.raises(WorkspaceError) as info:
+        workspace.begin_folder_run(plain, str(out))
+    assert f"is, sits inside or holds {tmp_root}" in str(info.value)
+    assert str(info.value).endswith(
+        f"Next: pass --out a folder apart from {tmp_root}, then rerun begin."
+    )
+    assert not (tmp_root / "feature" / "new").exists()
+    _nothing_written(plain)
+
+
 def test_folder_begin_cli_refuses_a_bad_flag_pairing_and_a_file(plain: Path) -> None:
     # issue 48: --out comes with --scope folder only; a refused --out exits 1 with its Next line.
     alone = _cli("begin", "--repo", str(plain), "--scope", "folder")
@@ -2599,7 +2686,7 @@ def _coders(repo: Path, train: str, name: str) -> list[dict[str, object]]:
     return coders
 
 
-def test_unit_refutations_counts_each_refuted_verifier_window(repo: Path) -> None:
+def test_a_unit_refuted_twice_then_verified_stands_on_its_newest_verdict(repo: Path) -> None:
     train, u1, u2 = _model_train(repo)
     _refute(repo, u1, 2)
     _dispatch(repo, u1, "SendMessage")
@@ -2607,9 +2694,8 @@ def test_unit_refutations_counts_each_refuted_verifier_window(repo: Path) -> Non
     _dispatch(repo, u2)
     _verifier_stop(repo, VERIFIED_REPLY, u2)
     records = workspace._audit_records(repo, train_state.load(repo, train))
-    assert workspace.unit_refutations(records, u1) == 2
-    assert workspace.unit_refutations(records, u2) == 0
     assert workspace.unit_verified(records, u1) is True
+    assert workspace.unit_verified(records, u2) is True
 
 
 # 222: a reply's first and last lines must be one verdict line, else it is no verdict at all.
@@ -2648,7 +2734,8 @@ def test_unit_verified_reads_only_a_reply_whose_first_and_last_lines_agree(
     _verifier_stop(repo, reply, u1)
     records = workspace._audit_records(repo, train_state.load(repo, train))
     assert workspace.unit_verified(records, u1) is verified
-    assert workspace.unit_refutations(records, u1) == refuted
+    verdict = workspace.newest_verdict(records, u1)
+    assert (verdict is not None and verdict[1].startswith("[VERDICT: REFUTED]")) is bool(refuted)
 
 
 def test_merge_refuses_a_unit_whose_window_holds_a_two_verdict_reply(repo: Path) -> None:
@@ -2989,7 +3076,8 @@ def test_coder_model_ignores_a_control_path_and_the_coder_model_keys(repo: Path)
     plumbing = ["sonnet", "coder U1: sonnet | class: Plumbing"]
     assert train_runner.unit_model(repo, "coder", "U1").lines == plumbing
     config = repo / ".claude" / "daedalus" / "config.json"
-    config.write_text(json.dumps({"models": {"plugin_file_coder": "fable", "coder": "haiku"}}))
+    old = {"schema": 1, "models": {"plugin_file_coder": "fable", "coder": "haiku"}}
+    config.write_text(json.dumps(old))
     assert train_runner.unit_model(repo, "coder", "U1").lines == plumbing
 
 

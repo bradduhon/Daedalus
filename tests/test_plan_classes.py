@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from lib import agent_models, work_classes
 from lib.operator_file import Operator
-from lib.plan_record import class_defects, load, split_place, validate
+from lib.plan_record import PROVIDES_NONE, class_defects, load, split_place, validate
 from lib.work_classes import MIDDLE_MODEL, MODEL_RANK, PLUMBING, above_middle
 
 from tests.conftest import REPO_ROOT, run_cli
@@ -35,7 +35,7 @@ def _write_plan(folder: Path, *lines: str) -> Path:
         for u in units
     )
     path = folder / "plan.md"
-    block = "\n".join([*lines, graph])
+    block = "\n".join([*lines, PROVIDES_NONE, graph])
     path.write_text(f"# plan\n\n```plan\n{block}\n```\n{sections}", encoding="utf-8")
     return path
 

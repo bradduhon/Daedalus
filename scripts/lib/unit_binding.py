@@ -152,9 +152,13 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
             units, everywhere = _load(path)
             record = units.get(unit_name)
             if record is None:
+                # issue 306: only a dispatch from a session inside the run records the unit.
                 return (
-                    f"unit {unit_name} was never dispatched in train {train_id}. "
-                    "Next: dispatch a coder with one Worktree: line naming it."
+                    f"unit {unit_name} was never dispatched in train {train_id}: the dispatch "
+                    f"that started this coder came from a session folder outside {repo}, or "
+                    "carried no single Worktree: line naming the unit, so no record was made. "
+                    f"Next: start a new coder from a session inside {repo}, with one Worktree: "
+                    "line naming the unit."
                 )
             if record.get("finished"):
                 return f"unit {unit_name} is merged and finished (0121). {WRITE_NEXT}"

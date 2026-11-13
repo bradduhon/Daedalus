@@ -5,6 +5,7 @@
 # Spec 3.4: a plan with a version line also prints an OK version line after the OK plan line.
 # Pin MAP -> REQ: --map <map.json> adds one defect per path two unjoined units own.
 # 0280: --repo names whose work classes apply; --classes prints them for the planner.
+# 0281: a plan needs provide lines or provides: none here; OK provide lines follow the OK lines.
 from __future__ import annotations
 
 import sys
@@ -20,6 +21,8 @@ from lib.plan_record import (  # noqa: E402
     has_class_fields,
     load,
     ownership_defects,
+    provide_rows,
+    provides_missing,
     read_ownership,
     validate,
 )
@@ -122,7 +125,7 @@ def main(argv: list[str]) -> int:
             print(loaded)
             return 1
         operator = loaded
-    defects = validate(plan, limit, operator)
+    defects = validate(plan, limit, operator) + provides_missing(plan)
     if map_path is not None:
         try:
             defects += ownership_defects(plan, read_ownership(map_path))
@@ -136,6 +139,9 @@ def main(argv: list[str]) -> int:
     if plan.version is not None:
         # Spec 3.4, pin D4 -> D5: printed only when the plan carries a version line.
         print(f"OK version: unit={plan.version.unit} {plan.version.summary_line}")
+    for row in provide_rows(plan.provides):
+        # 0281: the needs table rows for the plan table, the user's own first.
+        print(f"OK {row.text}")
     return 0
 
 

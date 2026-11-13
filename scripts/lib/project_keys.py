@@ -10,9 +10,7 @@ from dataclasses import dataclass
 from lib.agent_models import MODELS
 from lib.config import (
     AUDIT_RETENTION_FLOOR_DAYS,
-    CODER_KEYS,
     CONFIG_KEYS,
-    DEFAULT_CODER_MODELS,
     DEFAULT_MAX_CONCURRENT_BUILDERS,
     LIMIT_KEYS,
     MODEL_KEYS,
@@ -146,27 +144,6 @@ _LEVELS = (
     + f" or `{LITERACY_EXAMPLES[-1]}`, a project-relative path to the profile file without "
     "a leading slash, `..` or glob characters"
 )
-_CODER_TIER_TEXT = {
-    "default": "most units",
-    "control_path": "a unit that changes a file under `agents/`, `skills/`, `hooks/` or "
-    "`scripts/checks/`, or one of the three jail files",
-    "escalated": "the fresh coding agent that takes over a unit after its second failed check",
-}
-
-
-def _coder_row(key: str) -> KeyRow:
-    tier = CODER_KEYS[key]
-    # 0267: the unit's class picks a coding agent's model in a run, so no reader is left.
-    return KeyRow(
-        f"The model a coding agent runs on for {_CODER_TIER_TEXT[tier]}",
-        "string or null",
-        f"{_MODEL_NAMES}, or `null`; any other value is refused",
-        f'`null`: `"{DEFAULT_CODER_MODELS[tier]}"`',
-        '`"opus"`',
-        f"{NOT_ACTIVE}: the class of each unit's work picks its coding agent's model.",
-        (),
-        override=True,
-    )
 
 
 # 0076, B7, 0245: one row per key; tests hold the README table equal to reference_table().
@@ -176,18 +153,29 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
             f"The layout number of the {name} file; it tells Daedalus which version of the file "
             "layout the file was written in",
             "whole number",
-            "A whole number from 1 to the current layout number, which is 1",
+            f"A whole number from 1 to the current layout number, which is {current(form)}",
             "no number: read as today",
-            "`1`",
+            f"`{current(form)}`",
             "Daedalus can upgrade an older file to the current layout, after it shows you the "
             "plan, and refuses a file written for a newer plugin.",
             readers,
         )
-        for file, name, readers in (
-            (MANIFEST_FILE, "project", ("scripts/lib/manifest.py", "scripts/daedalus_setup.py")),
-            (CONFIG_FILE, "checkout", ("scripts/lib/config.py", "scripts/daedalus_setup.py")),
+        for file, form, name, readers in (
+            (
+                MANIFEST_FILE,
+                "manifest",
+                "project",
+                ("scripts/lib/manifest.py", "scripts/daedalus_setup.py"),
+            ),
+            (
+                CONFIG_FILE,
+                "config",
+                "checkout",
+                ("scripts/lib/config.py", "scripts/daedalus_setup.py"),
+            ),
             (
                 OPERATOR_FILE_NAME,
+                "operator",
                 "personal",
                 ("scripts/lib/operator_file.py", "scripts/daedalus_setup.py"),
             ),
@@ -681,7 +669,6 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         ("scripts/lib/agent_models.py", "scripts/daedalus_train.py"),
         override=True,
     ),
-    **{(CONFIG_FILE, f"models.{key}"): _coder_row(key) for key in CODER_KEYS},
     (CONFIG_FILE, "models.fable_available"): KeyRow(
         "Whether your plan offers the Fable model. When it does, the planner, and the auditor "
         "outside a run, run on Fable unless `models.agents` names them; inside a run the auditor "

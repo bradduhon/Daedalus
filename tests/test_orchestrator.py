@@ -263,8 +263,8 @@ MAIN_ONLY = (
     "daedalus_train.py writer-clear",
     # 233: the sealed one-time pass is the operator's grant, written by the main session.
     "daedalus_train.py grant",
-    # 0271: a fix unit joins the recorded plan from the main session only.
-    "daedalus_train.py fix-unit",
+    # 339: the operator's per-finding pick; fix-unit reads it, so the orchestrator never writes it.
+    "daedalus_train.py pick",
     # issue 48, 0173: plan step 2 runs it outside a run only; the run entry set the scope.
     "daedalus_doctor.py --print-scope",
     # 0209: the token budget gate; the main session runs it in unattended mode.
@@ -453,7 +453,7 @@ def test_recipe_handles_the_reaudit_and_ledger_resume_messages() -> None:
         PLUGIN + "daedalus_train.py verdict --repo <repo> --status approved --round <n> "
         "--findings <findings path> --tip <judged tip>`"
     )
-    order = [refresh, "resume the auditor with the step 5 items", approved, "the summary command"]
+    order = [refresh, "dispatch a new `auditor` on the model", approved, "the summary command"]
     places = [audit.index(part) for part in order]
     assert places == sorted(places)
     assert PLUGIN + "daedalus_workspace.py refresh --repo <repo> --name <train-id>-audit`" in (

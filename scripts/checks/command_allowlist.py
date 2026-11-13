@@ -37,7 +37,7 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"packs"}
         # 0192: the asset pathspec tail the judges' diff lines carry.
         | {"assets"}
-        # issue 187: the refutation record the model command reads before a fresh coder.
+        # issue 187: the refutation record the verify phase writes.
         | {"refuted"}
         # 0230: the composed record calls, each no wider than the calls this table admits.
         | {"dispatch", "route", "finish-unit"}
@@ -45,6 +45,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"providers"}
         # 0265: the run's validate of one unit, after its coder hands it in.
         | {"validate"}
+        # 339: the fix unit after a recorded Fix it now pick; pick itself stays the main session's.
+        | {"fix-unit"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),

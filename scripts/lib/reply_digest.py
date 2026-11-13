@@ -65,6 +65,7 @@ def digest(
     agent: str, message: str, repo: Path, train: str, agent_id: str, now: datetime | None = None
 ) -> str | None:
     # 0205: the report is written before the digest names it; a digest no shorter passes as is.
+    # issue 216: the report is saved even when the reply passes as is.
     kept = kept_lines(agent, message) if agent in DIGESTED else None
     if kept is None:
         return None
@@ -77,8 +78,6 @@ def digest(
         short = "\n".join([kept[0], *keys, line, *kept[1 + len(keys) :]])
     else:
         short = "\n".join([line, "", *kept] if agent == "coder" else [line, *kept])
-    if len(short) >= len(message):
-        return None
     folder.mkdir(parents=True, exist_ok=True)
     create_once(path, message, 0o600)
-    return short
+    return None if len(short) >= len(message) else short

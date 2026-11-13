@@ -13,6 +13,7 @@ edge: U1 -> U2 | kind: serial | why: b imports a.load
 edge: U3 -> U5 | kind: serial | why: U5 edits the README blocks U3 regenerates
 edge: U3 ~ U4 | kind: overlap | files: scripts/lib/shell.py | merge: U3 then U4
 pin: U1 -> U5 | `a.load(path: Path) -> A`
+provides: none
 graph: units=5 critical_path=2 width=3 overlap_only=U3~U4
 ```
 
