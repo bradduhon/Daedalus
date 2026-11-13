@@ -56,6 +56,12 @@ AUDIT, AUDIT_SUFFIX = "audit", "-audit"
 _AUDIT_NAME = re.compile(rf"{TRAIN_ID.pattern}{AUDIT_SUFFIX}")
 # 0271: {"<unit id>": {"fixes": [ids], "findings": [keys], "round": n} or {"rows": [n], "seq": s}}.
 FIX_UNITS = "fix_units"
+# 0284: on a unit, {"<agent id>": {"tokens": n} or {"reason": label}} at the agent's last return.
+SIZES = "context_sizes"
+# 0284: on a unit, [{"old", "tokens", "file", "new"}] in order; run-wide for an agent with no unit.
+HANDOFFS = "handoffs"
+# 0284: on a unit, the agents resumed once for the hand-off write.
+HANDOFF_RESUMES = "handoff_resumes"
 
 
 class TrainStateError(RuntimeError):
@@ -284,6 +290,74 @@ def fix_lines(state: dict[str, object]) -> list[tuple[str, str]]:
             parts.append(f"rows {rows} of the verifier verdict at seq {entry.get('seq')}")
         out.append((uid, f"{uid} is a fix of {fixes}, answering {' and '.join(parts)}"))
     return out
+
+
+def _handoff_entries(holder: dict[str, object]) -> list[dict[str, object]]:
+    raw = holder.get(HANDOFFS)
+    items = raw if isinstance(raw, list) else []
+    return [{str(k): v for k, v in item.items()} for item in items if isinstance(item, dict)]
+
+
+def _add_handoff(
+    entries: list[dict[str, object]], agent: str, size: dict[str, object], file: str | None
+) -> bool:
+    # 0284: one hand-off per old agent; a second reply of the same agent records nothing new.
+    if file is None or any(e.get("old") == agent for e in entries):
+        return False
+    entries.append({"old": agent, "tokens": size.get("tokens"), "file": file, "new": None})
+    return True
+
+
+def record_return(
+    repo: Path,
+    train_id: str,
+    unit_name: str | None,
+    agent: str,
+    size: dict[str, object],
+    file: str | None,
+) -> None:
+    # 0284: the return hook's one write; a unit records size and hand-off, no unit the hand-off.
+    def edit(state: dict[str, object]) -> None:
+        raw = state.get("units")
+        items = raw if isinstance(raw, list) else []
+        unit = next((u for u in items if isinstance(u, dict) and u.get("name") == unit_name), None)
+        if unit_name is None or unit is None:
+            entries = _handoff_entries(state)
+            if _add_handoff(entries, agent, size, file):
+                entries[-1]["unit"] = None
+                state[HANDOFFS] = entries
+            return
+        sizes = unit.get(SIZES)
+        unit[SIZES] = {**(sizes if isinstance(sizes, dict) else {}), agent: size}
+        entries = _handoff_entries(unit)
+        # 0284: a later agent returning on the unit is the new agent of its open hand-off.
+        open_ = [e for e in entries if e.get("new") is None and e.get("old") != agent]
+        if open_ and not any(e.get("old") == agent for e in entries):
+            open_[-1]["new"] = agent
+        _add_handoff(entries, agent, size, file)
+        if entries:
+            unit[HANDOFFS] = entries
+
+    change(repo, train_id, edit)
+
+
+def handoff_rows(state: dict[str, object], train_id: str) -> list[tuple[str, str, str, str, str]]:
+    # 0284: (unit, old agent, new agent, size, file) per hand-off, unit order, then run-wide.
+    rows: list[tuple[str, str, str, str, str]] = []
+    holders = [(str(u.get("name")).removeprefix(f"{train_id}-"), u) for u in units(state)]
+    for label, holder in [*holders, ("none", state)]:
+        for entry in _handoff_entries(holder):
+            tokens = entry.get("tokens")
+            measured = isinstance(tokens, int) and not isinstance(tokens, bool)
+            new = str(entry.get("new") or "none")
+            size = str(tokens) if measured else "unmeasured"
+            rows.append((label, str(entry.get("old")), new, size, str(entry.get("file"))))
+    return rows
+
+
+def handoff_files(unit: dict[str, object]) -> list[tuple[str, str, object]]:
+    # 0284: (old agent, file, new agent) of each hand-off recorded on one unit, in order.
+    return [(str(e.get("old")), str(e.get("file")), e.get("new")) for e in _handoff_entries(unit)]
 
 
 def mark_audit(repo: Path, train_id: str, name: str) -> None:
