@@ -51,6 +51,7 @@ from lib.train_runner import (  # noqa: E402
     record_verdict,
     refuted,
     resume,
+    round_lines,
     route_unit,
     start,
     state_lines,
@@ -171,6 +172,8 @@ def _parser() -> argparse.ArgumentParser:
     tail.add_argument("--repo", type=Path, required=True)
     tail.add_argument("--base", required=True)
     tail.add_argument("--tip", required=True)
+    # 0278: a verifier dispatch's unit; a round after a refutation adds its Range and Place lines.
+    tail.add_argument("--unit")
     # 233: the main session's sealed one-time pass; the command text comes from a file only.
     grant = sub.add_parser("grant")
     grant.add_argument("--repo", type=Path, required=True)
@@ -406,14 +409,17 @@ def _ask_check(question: Path, brief: Path | None) -> Outcome:
     return Outcome(EXIT_STOP, lines)
 
 
-def _assets(repo: Path, base: str, tip: str) -> Outcome:
+def _assets(repo: Path, base: str, tip: str, unit: str | None = None) -> Outcome:
+    later = round_lines(repo, unit, tip) if unit is not None else Outcome(EXIT_OK, [])
+    if later.code != EXIT_OK:
+        return later
     try:
         loaded = load_manifest(repo)
         declared = loaded.assets if loaded is not None else Assets()
         found = assets.exclusion(repo, base, tip, declared)
     except (ManifestError, assets.AssetsError, GitTimeout, OSError) as exc:
         return Outcome(EXIT_STOP, [f"assets: {exc}"])
-    return Outcome(EXIT_OK, assets.lines(found))
+    return Outcome(EXIT_OK, [*assets.lines(found), *later.lines])
 
 
 def _writer_clear(repo: Path) -> Outcome:
@@ -587,7 +593,7 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "writer-clear":
         return _writer_clear(repo)
     if args.action == "assets":
-        return _assets(repo, args.base, args.tip)
+        return _assets(repo, args.base, args.tip, args.unit)
     if args.action == "grant":
         return _grant(repo, args)
     if args.action == "dispatch":

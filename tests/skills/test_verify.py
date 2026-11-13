@@ -83,7 +83,8 @@ def test_verify_skill_dispatches_one_verifier_per_unit() -> None:
         " once, the same cap the build phase's step 1 uses.",
         "The verifier stays warm only for a fix pass on the same unit: after a `FIX.` round, the"
         " unit's next verdict goes to the verifier that refuted it, by the orchestrator's message"
-        " with the same items.",
+        " with the same items, the `Range:` and `Place:` lines of that round's step 3 call"
+        " included unchanged.",
     ):
         assert sentence in unit, sentence
     assert "The first time, run" not in unit
