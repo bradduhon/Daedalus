@@ -413,7 +413,7 @@ def test_the_read_line_and_the_full_diff_carry_the_asset_tail() -> None:
     step = flatten(VERIFY_SKILL.read_text(encoding="utf-8"))
     assert (
         "first run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py assets --repo <repo> "
-        "--base <lock sha> --tip <b>`" in step
+        "--base <lock sha> --tip <b> --unit <unit id>`" in step
     )
     assert (
         "With a tail, the `-U0` command below ends with it, copied exactly, so no asset file "
