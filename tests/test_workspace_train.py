@@ -2995,7 +2995,7 @@ def test_model_unit_flag_takes_the_coder_and_the_verifier_only(repo: Path) -> No
         check=False,
         cwd=repo,
     )
-    assert done.returncode == 1 and "model --unit picks a coder's or a verifier's" in done.stdout
+    assert done.returncode == 1 and "model --unit picks a coder's, a verifier's or" in done.stdout
     ok = subprocess.run(
         [*argv, "--agent", "coder", "--unit", "U1"],
         capture_output=True,
