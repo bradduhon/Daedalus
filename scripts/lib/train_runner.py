@@ -119,6 +119,8 @@ VERDICTS = {
 VERDICT_NEEDLE = "daedalus_train.py verdict"
 # 0083: the Standards Packet is written once to the train's scratch folder after the pick commit.
 STANDARDS_FILE = "standards-packet.md"
+# issue 325: the document skill writes the docs unit's brief under this name, not the unit slug.
+DOCS_BRIEF = "docs.md"
 PACKETS = ("contract", "standards")
 PICK_LINE = "Pick ledger ids:"
 NOT_CHOSEN = "not chosen"
@@ -1023,8 +1025,12 @@ def completion_contract_refusal(
     ]
     try:
         current = _sha256(_read_packet(Path(contract), "Locked Contract Packet"))[:12]
-    except RunnerError as exc:
-        return str(exc)
+    except RunnerError:
+        # issue 325: the packet reader's next step is the step command's, not the merge's.
+        return (
+            f"unit {uid} cannot be compared with its contract: {contract} could not be read. "
+            f"Next: restore the contract file at {contract}, then rerun the merge."
+        )
     if not done:
         return (
             f"unit {uid} has no coder COMPLETE line for branch {branch} in this session's audit "
@@ -1752,7 +1758,11 @@ def _open_briefs(repo: Path, train_id: str, state: dict[str, object]) -> list[Pa
         if not train_state.is_audit_unit(u) and not bound.get(_text(u, "name"), {}).get("finished")
     }
     folder = _scratch(repo, train_id) / "briefs"
-    found = [folder / f"{name.removeprefix(f'{train_id}-')}.md" for name in sorted(names)]
+    docs = f"{train_id}{train_state.DOCS_SUFFIX}"
+    found = [
+        folder / (DOCS_BRIEF if name == docs else f"{name.removeprefix(f'{train_id}-')}.md")
+        for name in sorted(names)
+    ]
     found += [
         Path(_text(item, "brief"))
         for item in _objects(state, "dispatches")
