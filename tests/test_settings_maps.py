@@ -177,9 +177,20 @@ def test_the_chain_refuses_a_file_with_no_number_and_a_current_file_is_unchanged
     assert same.doc == {"schema": 2, "x": 1} and same.actions == []
 
 
-@pytest.mark.parametrize("form", ["manifest", "config", "operator"])
-def test_every_real_kind_starts_at_schema_one_with_no_steps(form: str) -> None:
+@pytest.mark.parametrize("form", ["manifest", "operator"])
+def test_a_real_kind_without_a_change_stays_at_schema_one_with_no_steps(form: str) -> None:
     assert settings_maps.KINDS[form] == Kind(1, ())
+
+
+def test_the_config_kind_is_at_schema_two_with_one_step_that_drops_three_keys() -> None:
+    kind = settings_maps.KINDS["config"]
+    (step,) = kind.steps
+    assert kind.current == 2 and (step.start, step.end) == (1, 2)
+    assert sorted(row.path for row in step.rows if isinstance(row, settings_maps.Drop)) == [
+        ("models", "coder"),
+        ("models", "coder_after_rejection"),
+        ("models", "plugin_file_coder"),
+    ]
 
 
 READERS: dict[str, Callable[[dict[str, object]], object]] = {
@@ -200,7 +211,7 @@ ERRORS = {"manifest": ManifestError, "config": ConfigError, "operator": Operator
         (None, "schema must be a whole number"),
         (0, "schema is 0, and the lowest schema number is 1"),
         (-3, "schema is -3, and the lowest schema number is 1"),
-        (2, "schema is 2, but this version of Daedalus reads schema 1 at most"),
+        (3, "schema is 3, but this version of Daedalus reads schema"),
     ],
 )
 def test_the_three_readers_refuse_a_bad_schema_number(form: str, value: object, words: str) -> None:
@@ -208,14 +219,14 @@ def test_the_three_readers_refuse_a_bad_schema_number(form: str, value: object, 
         READERS[form]({"schema": value})
     text = str(err.value)
     assert words in text and text.rstrip().endswith(".") and "Next:" in text
-    if value == 2:
+    if value == 3:
         assert "newer version wrote this file" in text and "update the Daedalus plugin" in text
 
 
 @pytest.mark.parametrize("form", ["manifest", "config", "operator"])
 def test_a_file_with_no_number_and_a_file_with_the_current_number_are_read(form: str) -> None:
     READERS[form]({})
-    READERS[form]({"schema": 1})
+    READERS[form]({"schema": settings_maps.current(form)})
 
 
 def test_the_number_is_not_a_personal_override() -> None:
@@ -224,8 +235,12 @@ def test_the_number_is_not_a_personal_override() -> None:
 
 
 def test_the_starter_shapes_hold_the_number_first() -> None:
-    for starter in (starter_manifest(), starter_config(), starter_operator()):
-        assert next(iter(starter)) == "schema" and starter["schema"] == 1
+    for form, starter in (
+        ("manifest", starter_manifest()),
+        ("config", starter_config()),
+        ("operator", starter_operator()),
+    ):
+        assert next(iter(starter)) == "schema" and starter["schema"] == settings_maps.current(form)
 
 
 def test_create_and_replace_write_the_number(repo_cwd: Path, tmp_path: Path) -> None:

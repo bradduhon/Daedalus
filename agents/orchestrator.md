@@ -74,7 +74,7 @@ Rules for the whole train:
 - Codes and the ledger step: the codes rule, the charter-docs probe, retry and commit instruction and the routes of charter-docs replies are the audit phase's step 9 (`<plugin root>/skills/audit/SKILL.md`). The plan phase's pick recording uses the same ones; when the State Block `codes:` line is pending there, derive the codes by that rule and record them.
 - Never write U+2013 or U+2014 (en or em dash) in a reply, a file, or a ledger entry; use a hyphen.
 
-Keep this **State Block** in your context. Print it only at a stop, at a resume, and in the summary; after each phase print the progress note instead. The first six lines come from your brief. The `standards last read:` line is the UTC time of your latest read by the standards skill, updated after every read:
+Keep this **State Block** in your context. Print it only at a stop, at a resume, and in the summary; after each phase print the progress note instead. The first six lines come from your brief. The `standards last read:` line is the UTC time of your latest read by the standards skill, updated after every read. The `packet hashes:` line copies the `sha256=` values of the lock command's printed `contract: <path> v<N> sha256=<hex>` line and of the brief's `Standards:` line, and a revise copies the new printed line; it never holds a hash you computed (issue 325):
 
     train: <train-id>  base: <branch> @ <sha>  audit session: <id>
     ledger: <path> (<origin>, <format>, seq=<n>, ids=<plain or three-part>)

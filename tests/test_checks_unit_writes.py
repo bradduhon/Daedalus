@@ -752,33 +752,27 @@ def test_a_document_agent_in_a_folder_run_writes_no_marker_outside_its_output_fo
     assert (allow, hook) == (False, "doc_outputs")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a folder run's output folder may sit inside the plugin's temporary root, so a "
-    "document agent can write a hand-back pass marker there",
-)
-@pytest.mark.parametrize("agent", ["writer", "comparer"])
+@pytest.mark.parametrize("where", ["marker", "root", "above"])
 def test_a_folder_run_output_folder_on_the_marker_folder_writes_no_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], where: str
 ) -> None:
+    # 327: the freeze refuses an output folder that is, sits inside or holds the temporary root.
     import freeze_sources
     from lib import storage
 
-    from tests.test_doc_train import TRAIN, _call, _dispatched
+    from tests.test_doc_train import TRAIN
 
     monkeypatch.setattr(storage, "TMP_ROOT", tmp_path / "tmproot")
     root = tmp_path.resolve() / "plain"
     root.mkdir()
     (root / "base.md").write_text("The fee is 12.\n", encoding="utf-8")
-    out = storage.make_tmp_dir("handback-pass", root).resolve()
+    marker = storage.make_tmp_dir("handback-pass", root).resolve()
+    out = {"marker": marker, "root": storage.TMP_ROOT, "above": tmp_path.resolve()}[where]
     write_folder_run(root, out, train=TRAIN)
     monkeypatch.chdir(root)
-    assert (
-        freeze_sources.main(
-            ["--train", TRAIN, "--output-dir", str(out), "--source", "A=baseline:base.md"]
-        )
-        == 0
+    code = freeze_sources.main(
+        ["--train", TRAIN, "--output-dir", str(out), "--source", "A=baseline:base.md"]
     )
-    _dispatched(root, agent)
-    allow, _, _ = _call(root, agent, "Write", file_path=f"{out}/verifier-1", content="x")
-    assert not allow
+    err = capsys.readouterr().err
+    assert code == 1 and "a folder the plugin keeps its own files in" in err
+    assert f"is, sits inside or holds {storage.TMP_ROOT}" in err and "Next:" in err

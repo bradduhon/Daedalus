@@ -37,7 +37,7 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"packs"}
         # 0192: the asset pathspec tail the judges' diff lines carry.
         | {"assets"}
-        # issue 187: the refutation record the model command reads before a fresh coder.
+        # issue 187: the refutation record the verify phase writes.
         | {"refuted"}
         # 0230: the composed record calls, each no wider than the calls this table admits.
         | {"dispatch", "route", "finish-unit"}

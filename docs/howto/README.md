@@ -297,7 +297,7 @@ The verifier checks each finished unit against its brief. A unit can also fail a
 
     python3 <plugin>/scripts/daedalus_train.py refuted --repo <repo> --unit <unit id>
 
-For a check you failed, it adds `--operator-check "<check text>"`. The command prints `refuted <unit id>: <count>`, the number of rejections the unit has had. A repeated call on the same rejection counts it once. The first rejection goes back to the unit's coding agent for one fix. The second goes to a fresh coding agent on the model the `models.coder_after_rejection` setting names, and the run goes on. The coding agent that held the unit can no longer take any unit freed this way. The third rejection comes to you as a question. A non-zero exit stops the run and shows the command's `Next:` line.
+For a check you failed, it adds `--operator-check "<check text>"`. The command prints `refuted <unit id>: <count>`, the number of rejections the unit has had. A repeated call on the same rejection counts it once. The first and second rejections each go back to the unit's coding agent for one fix, and the run goes on. The third rejection comes to you as a question. A non-zero exit stops the run and shows the command's `Next:` line.
 
 ### The security gate
 

@@ -22,6 +22,7 @@ from lib import (
     narrow,
     plan_record,
     scrub,
+    storage,
     train_state,
     unit_binding,
     writer_mode,
@@ -587,6 +588,17 @@ def make_output(target: Path, rerun: str) -> Path:
     return target.resolve()
 
 
+def plugin_folder_overlap(real: str | Path) -> Path | None:
+    # 327: the plugin's temporary root or data folder that real is, sits inside or holds, else None.
+    path = Path(os.path.realpath(real))
+    places = [Path(os.path.realpath(storage.TMP_ROOT))]
+    try:
+        places.append(Path(os.path.realpath(cache_dir_or_probe())))
+    except RuntimeError:
+        pass
+    return next((p for p in places if path.is_relative_to(p) or p.is_relative_to(path)), None)
+
+
 def _folder_out(root: Path, output: str, rerun: str = "begin") -> Path | None:
     # issue 48, 0069: an existing writable folder as is; None admits <root>/docs or new under /tmp.
     target = output_target(root, output)
@@ -598,6 +610,12 @@ def _folder_out(root: Path, output: str, rerun: str = "begin") -> Path | None:
         or real == home
         or real.is_relative_to(Path(os.path.realpath(root / ".claude")))
     )
+    place = None if barred else plugin_folder_overlap(real)
+    if place is not None:
+        raise WorkspaceError(
+            f"--out {output} is, sits inside or holds {place}, a folder the plugin keeps its own "
+            f"files in. Next: pass --out a folder apart from {place}, then rerun {rerun}."
+        )
     if not barred and real.is_dir() and os.access(real, os.W_OK | os.X_OK):
         return real
     docs = Path(os.path.realpath(root / "docs"))
@@ -1176,17 +1194,6 @@ def unit_verified(
     return all(audit_proof._exempt(granted.get(str(n)), tip, run) for n in range(1, len(rows) + 1))
 
 
-def unit_refutations(records: list[dict[str, object]], worktree: Path) -> int:
-    # 0187, 0231: one refutation per dispatch naming the worktree whose keyed reply is REFUTED.
-    anchors = _anchors(records, worktree)
-    count = 0
-    for start, stop in zip(anchors, [*anchors[1:], len(records)], strict=False):
-        reply = _pick(_keyed_replies(records, worktree, start, stop))
-        if reply is not None and reply[1] is not None and reply[1].startswith(REFUTED_PREFIX):
-            count += 1
-    return count
-
-
 def refuted_rows(line: str) -> list[str] | None:
     # 229, agents/verifier.md:165: rows joined by "; "; a bare ";" leaves the row count unknown.
     if not line.startswith(REFUTED_PREFIX):
@@ -1381,7 +1388,10 @@ def require_contract(
         return
     from lib import train_runner  # 0271: train_runner imports this module, so it loads here.
 
-    refusal = train_runner.completion_contract_refusal(contract, records, str(unit["branch"]), uid)
+    kept = train_state.record(unit, train_state.COMPLETION)
+    refusal = train_runner.completion_contract_refusal(
+        contract, records, str(unit["branch"]), uid, kept
+    )
     if refusal is not None:
         raise WorkspaceError(refusal)
 

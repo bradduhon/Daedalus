@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "local_docs_folder": null,
+  "git_excluded_folders": [],
+  "coding_rules": [
+    {"folder": "/work/rules"},
+    {"builtin": "baseline"}
+  ],
+  "personal_overrides": {},
+  "models": {
+    "coder": "sonnet",
+    "plugin_file_coder": "opus",
+    "coder_after_rejection": "opus"
+  }
+}

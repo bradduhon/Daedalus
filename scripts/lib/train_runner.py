@@ -1019,16 +1019,39 @@ def _completion_value(line: str, name: str) -> str | None:
     return found[-1] if found else None
 
 
-def completion_contract_refusal(
-    contract: str, records: list[dict[str, object]], branch: str, uid: str
-) -> str | None:
-    # 0271: the newest coder COMPLETE line for the branch carries the contract's current hash;
-    # no line in the session's log is a refusal, never a pass.
-    done = [
+def _complete_lines(records: list[dict[str, object]], branch: str) -> list[str]:
+    return [
         reply.last
         for reply in agent_replies(records)
         if reply.agent == "coder" and complete_branch(reply.last) == branch
     ]
+
+
+def completion_values(records: list[dict[str, object]], branch: str) -> dict[str, str] | None:
+    # 324: the branch, contract= and standards= values of the newest coder COMPLETE line, else None.
+    done = _complete_lines(records, branch)
+    if not done:
+        return None
+    return {
+        "branch": branch,
+        "contract": _completion_value(done[-1], "contract") or "",
+        "standards": _completion_value(done[-1], "standards") or "",
+    }
+
+
+def completion_contract_refusal(
+    contract: str,
+    records: list[dict[str, object]],
+    branch: str,
+    uid: str,
+    recorded: dict[str, object] | None = None,
+) -> str | None:
+    # 0271, 324: the newest COMPLETE line for the branch, else the unit's recorded completion,
+    # carries the contract's current hash; neither is a refusal, never a pass.
+    done = _complete_lines(records, branch)
+    kept = recorded or {}
+    if not done and kept.get("branch") == branch and isinstance(kept.get("contract"), str):
+        done = [f"{COMPLETE_LINE} branch={branch} contract={kept['contract']}"]
     try:
         current = _sha256(_read_packet(Path(contract), "Locked Contract Packet"))[:12]
     except RunnerError:
@@ -2720,6 +2743,27 @@ def _last_model(unit: dict[str, object]) -> str:
     return _text(prior[-1], "model") if prior else "none"
 
 
+def _keep_completion(
+    repo: Path, train_id: str, state: dict[str, object], unit: dict[str, object]
+) -> None:
+    # 324: the route call sees the coder's COMPLETE line in the session's log and keeps its values
+    # on the unit, so a run resumed in a new session merges without a new line.
+    try:
+        found = completion_values(workspace._audit_records(repo, state), str(unit["branch"]))
+    except workspace.WorkspaceError:
+        return
+    if found is None or train_state.record(unit, train_state.COMPLETION) == found:
+        return
+
+    def add(state: dict[str, object]) -> None:
+        raw = state.get("units")
+        for each in raw if isinstance(raw, list) else []:
+            if isinstance(each, dict) and each.get("name") == unit["name"]:
+                each[train_state.COMPLETION] = found
+
+    train_state.change(repo, train_id, add)
+
+
 def _route_lines(
     repo: Path, train_id: str, unit_id: str, verdict: str, rows: int | None
 ) -> list[str]:
@@ -2738,6 +2782,7 @@ def _route_lines(
                 f"the newest verifier reply on unit {planned.id} is not "
                 f"{workspace.VERIFIED}. Next: route the verdict the verifier gave."
             )
+        _keep_completion(repo, train_id, state, unit)
         checks = _operator_checks(repo, planned)
         count = len(_refutation_seqs(unit))
         head = f"route {planned.id}: verified model={_last_model(unit)} refutations={count}"
