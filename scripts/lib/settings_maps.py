@@ -83,7 +83,19 @@ class Kind:
 # 0264: the three settings files by form; schema 1 is the first, so every list is empty.
 KINDS: dict[str, Kind] = {
     "manifest": Kind(1, ()),
-    "config": Kind(1, ()),
+    "config": Kind(
+        2,
+        (
+            Step(
+                1,
+                2,
+                tuple(
+                    Drop(("models", key), "no run reads it; a unit's class picks the model")
+                    for key in ("coder", "plugin_file_coder", "coder_after_rejection")
+                ),
+            ),
+        ),
+    ),
     "operator": Kind(1, ()),
 }
 # 0264: small pure functions a Convert row names; each maps one old value to the new one.
@@ -91,7 +103,10 @@ CONVERTERS: dict[str, Callable[[object], object]] = {}
 # 0264: per form and schema number, the hash of that schema's key table (project_keys.fingerprint).
 FINGERPRINTS: dict[str, dict[int, str]] = {
     "manifest": {1: "88107e513568dbdc04c4a82e139cafa545a53f1d11d7c0152cce403173d98e80"},
-    "config": {1: "bdc56bcde7810f1a4ecf06bff5dd033f03b5621cde6ba2c5bc097d426a6bd1a0"},
+    "config": {
+        1: "bdc56bcde7810f1a4ecf06bff5dd033f03b5621cde6ba2c5bc097d426a6bd1a0",
+        2: "76115654e98582115e3cd130a6f1b70c47909ab1c4b3d358d4c7a600b8d359b8",
+    },
     "operator": {1: "a5b85ce22acd72d92f91f9329d827ab68cc08a9953472701b03d40511c852a7b"},
 }
 

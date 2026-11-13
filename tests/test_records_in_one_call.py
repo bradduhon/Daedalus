@@ -307,6 +307,81 @@ def test_route_verified_lists_the_operator_checks(tmp_path: Path) -> None:
     ]
 
 
+def _coder_commits(path: Path, name: str) -> str:
+    (path / name).write_text("late\n")
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "-m", f"late {name}")
+    return git(path, "rev-parse", "HEAD").stdout.strip()
+
+
+@pytest.mark.usefixtures("fixed")
+def test_a_coder_commit_after_the_verified_route_is_refused_at_the_merge(tmp_path: Path) -> None:
+    # 77: route records the tip the VERIFIED reply judged; the merge refuses a tip that moved.
+    root = _fixture(tmp_path / "repo")
+    _ok(train_runner.dispatch_unit(root, "U1"))
+    path = _built(root, "U1")
+    judged = git(path, "rev-parse", "HEAD").stdout.strip()
+    _verdict(root, path, VERIFIED_REPLY)
+    _ok(train_runner.route_unit(root, "U1", "VERIFIED"))
+    tips = train_state.units(train_state.load(root, TRAIN))[0][workspace.VERIFIED_TIPS]
+    assert list(tips.values()) == [judged]  # type: ignore[union-attr]
+    moved = _coder_commits(path, "late.txt")
+    # 77: a second route on the same reply keeps the first tip.
+    _ok(train_runner.route_unit(root, "U1", "VERIFIED"))
+    before = _snapshot(root)
+    refused = train_runner.finish_unit(root, "U1")
+    assert refused.code == 1, refused.lines
+    said = "\n".join(refused.lines)
+    assert f"branch moved to {moved[:12]} after its VERIFIED reply at seq " in said
+    assert f"judged {judged[:12]}" in said and said.count("Next:") == 1
+    assert _snapshot(root) == before and path.is_dir()
+    # 77: the verifier reads the new tip, route records it, and the merge takes the unit.
+    _verdict(root, path, VERIFIED_REPLY)
+    _ok(train_runner.route_unit(root, "U1", "VERIFIED"))
+    line = _ok(train_runner.finish_unit(root, "U1"))
+    assert len(line) == 1 and re.fullmatch(rf"finish U1: merged={HEX40} next=none", line[0])
+    assert git(root, "merge-base", "--is-ancestor", moved, f"daedalus/{TRAIN}").returncode == 0
+
+
+@pytest.mark.usefixtures("fixed")
+def test_a_wave_merge_refuses_a_unit_whose_tip_moved_after_its_verified_route(
+    tmp_path: Path,
+) -> None:
+    # 77: the one-unit wave merge shares the gate while another unit still builds.
+    root = _fixture(tmp_path / "repo")
+    _ok(train_runner.dispatch_unit(root, "U1"))
+    _ok(train_runner.dispatch_unit(root, "U2"))
+    path = _built(root, "U1")
+    _verdict(root, path, VERIFIED_REPLY)
+    _ok(train_runner.route_unit(root, "U1", "VERIFIED"))
+    _built(root, "U2")
+    _coder_commits(path, "late.txt")
+    base = git(root, "rev-parse", f"daedalus/{TRAIN}").stdout.strip()
+    with pytest.raises(workspace.WorkspaceError, match="after its VERIFIED reply"):
+        workspace.merge(root, ["U1"])
+    assert git(root, "rev-parse", f"daedalus/{TRAIN}").stdout.strip() == base
+
+
+@pytest.mark.usefixtures("fixed")
+def test_a_run_with_no_judged_tip_on_record_still_merges_and_is_told(tmp_path: Path) -> None:
+    # 77: a run recorded before the route kept a tip merges as before, with one line saying so.
+    root = _fixture(tmp_path / "repo")
+    _ok(train_runner.dispatch_unit(root, "U1"))
+    _ok(train_runner.dispatch_unit(root, "U2"))
+    path = _built(root, "U1")
+    _verdict(root, path, VERIFIED_REPLY)
+    tip = git(path, "rev-parse", "HEAD").stdout.strip()
+    _built(root, "U2")
+    lines = _ok(train_runner.finish_unit(root, "U1"))
+    assert re.fullmatch(rf"finish U1: merged={HEX40} next=none", lines[0]), lines
+    told = re.fullmatch(
+        r"no judged tip: unit u1 merged on its VERIFIED reply at seq \d+ with no judged tip on "
+        r"record, as in a run recorded before issue 77\. Its tip (\w+) was not compared\.",
+        lines[1],
+    )
+    assert len(lines) == 2 and told is not None and told.group(1) == tip[:12], lines
+
+
 @pytest.mark.usefixtures("fixed")
 def test_finish_unit_leaves_what_finish_notes_and_the_next_dispatch_leave(
     tmp_path: Path,
@@ -315,6 +390,8 @@ def test_finish_unit_leaves_what_finish_notes_and_the_next_dispatch_leave(
     for root in (seq, one):
         _ok(train_runner.dispatch_unit(root, "U1"))
         _verdict(root, _built(root, "U1"), VERIFIED_REPLY)
+        # 77: verify step 5 routes the verdict, which records the judged tip, before the merge.
+        _ok(train_runner.route_unit(root, "U1", "VERIFIED"))
     workspace.finish(seq)
     notes = "## Rulings\n" + NOTES[0] + "\n## Blocks\n" + NOTES[1] + "\n"
     (_scratch(seq) / "summary-notes.md").write_text(notes, encoding="utf-8")

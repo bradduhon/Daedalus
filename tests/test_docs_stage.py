@@ -65,6 +65,22 @@ def _docs_unit(repo: Path) -> Path:
     return path
 
 
+def _docs_head(repo: Path, head: str) -> None:
+    # 112: the docs branch the documentation stage merged, its head at the sha given.
+    train = _train(repo)
+    name = f"{train}{train_state.DOCS_SUFFIX}"
+    if not any(u.get("name") == name for u in train_state.units(_state(repo))):
+        _docs_unit(repo)
+    _git(repo, "branch", "-f", f"daedalus-unit/{name}", head)
+
+
+def verified_docs(repo: Path, tip: str, head: str | None = None) -> None:
+    # 112: a verified docs record on tip, judging the docs branch head (tip unless given).
+    _docs_head(repo, head or tip)
+    record = {"status": "verified", "tip": tip, "judged": head or tip}
+    train_state.update(repo, _train(repo), docs_verdict=record)
+
+
 def _verifier_says(repo: Path, worktree: Path, line: str) -> None:
     # 0121: a claims-mode dispatch naming the docs worktree, then the verifier's reply.
     prompt = f"CLAIMS MODE.\nClaim: {CLAIM} a claim\nUnit worktree: {worktree}"
@@ -212,7 +228,8 @@ def test_docs_only_commits_pass_with_a_verified_docs_record(repo: Path, plugin: 
     assert f"moved past the judged tip {judged[:12]}" in str(info.value)
     assert gh_policy.verdict_reason(str(repo), "gh pr create") is not None
     _verifier_says(repo, worktree, "[VERDICT: VERIFIED] claims=2")
-    assert train_runner.record_docs_verdict(repo, "verified").code == 0
+    _docs_head(repo, current)
+    assert train_runner.record_docs_verdict(repo, "verified", judged=current).code == 0
     assert push_proof(repo, train) == (
         f"OK approved: every finding exempted, train {train}, round 1, integration tip "
         f"{current[:12]}, docs verified on tip {current[:12]}"
@@ -226,6 +243,41 @@ def test_docs_only_commits_pass_with_a_verified_docs_record(repo: Path, plugin: 
     )
 
 
+def test_the_push_proof_checks_the_judged_docs_tip(repo: Path, plugin: Path) -> None:
+    # 112: a verified docs record passes only when it judged the docs commits that merged.
+    _exempted_security(repo, plugin)
+    train = _train(repo)
+    first = _commit(repo, "README.md")
+    current = _commit(repo, "docs/guardrails.md")
+    verified_docs(repo, current)
+    assert push_proof(repo, train).endswith(f"docs verified on tip {current[:12]}")
+    _git(repo, "switch", "-q", "-c", "unmerged")
+    later = _commit(repo, "docs/howto/README.md")
+    _git(repo, "switch", "-q", "main")
+    assert _integration(repo) == current
+    cases = [
+        ({"status": "verified", "tip": current}, current, "names no judged docs tip"),
+        (
+            {"status": "verified", "tip": current, "judged": first},
+            current,
+            f"the merged docs commits end at {current[:12]}, not at the judged docs tip "
+            f"{first[:12]}",
+        ),
+        (
+            {"status": "verified", "tip": current, "judged": later},
+            later,
+            f"the docs branch head {later[:12]} is not merged into the tip {current[:12]}",
+        ),
+    ]
+    for record, head, said in cases:
+        _docs_head(repo, head)
+        train_state.update(repo, train, docs_verdict=record)
+        with pytest.raises(ProofError) as info:
+            push_proof(repo, train)
+        assert said in str(info.value)
+        assert gh_policy.verdict_reason(str(repo), "gh pr create") is not None
+
+
 def test_a_no_ff_merge_of_the_docs_branch_is_judged_by_its_commits(
     repo: Path, plugin: Path
 ) -> None:
@@ -237,14 +289,15 @@ def test_a_no_ff_merge_of_the_docs_branch_is_judged_by_its_commits(
     _git(repo, "switch", "-q", "main")
     _git(repo, "merge", "-q", "--no-ff", "-m", "merge docs", "docs-side")
     current = _integration(repo)
-    train_state.update(repo, train, docs_verdict={"status": "verified", "tip": current})
+    side = _git(repo, "rev-parse", "docs-side").stdout.strip()
+    verified_docs(repo, current, side)
     assert push_proof(repo, train).endswith(f"docs verified on tip {current[:12]}")
     _git(repo, "switch", "-q", "docs-side")
     _commit(repo, "scripts/side.py")
     _git(repo, "switch", "-q", "main")
     _git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "docs-side")
     current = _integration(repo)
-    train_state.update(repo, train, docs_verdict={"status": "verified", "tip": current})
+    verified_docs(repo, current, _git(repo, "rev-parse", "docs-side").stdout.strip())
     with pytest.raises(ProofError) as info:
         push_proof(repo, train)
     assert "changes more than the four public docs" in str(info.value)
@@ -254,9 +307,10 @@ def test_a_commit_outside_the_four_docs_is_refused(repo: Path, plugin: Path) -> 
     judged = _exempted_security(repo, plugin)
     train = _train(repo)
     worktree = _docs_unit(repo)
-    _commit(repo, "README.md", "scripts/x.py")
+    current = _commit(repo, "README.md", "scripts/x.py")
     _verifier_says(repo, worktree, "[VERDICT: VERIFIED] claims=1")
-    assert train_runner.record_docs_verdict(repo, "verified").code == 0
+    _docs_head(repo, current)
+    assert train_runner.record_docs_verdict(repo, "verified", judged=current).code == 0
     with pytest.raises(ProofError) as info:
         push_proof(repo, train)
     assert f"past the judged tip {judged[:12]} changes more than the four public docs" in str(
@@ -302,7 +356,7 @@ def test_an_approved_verdict_admits_docs_commits_through_the_gh_gate(
     assert gh_policy.verdict_reason(str(repo), "gh pr create") is not None
     state = _state(repo)
     assert tip_admits(repo, train, state, judged, current) is not None
-    train_state.update(repo, train, docs_verdict={"status": "verified", "tip": current})
+    verified_docs(repo, current)
     assert tip_admits(repo, train, _state(repo), judged, current) is None
     assert gh_policy.verdict_reason(str(repo), "gh pr create") is None
     assert tip_admits(repo, train, _state(repo), "z" * 40, current) is not None

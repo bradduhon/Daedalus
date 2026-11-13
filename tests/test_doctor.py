@@ -766,24 +766,15 @@ def test_an_old_config_key_is_the_config_miss(tmp_path: Path, old: str) -> None:
     assert f"unknown keys ['{old}']" in miss and "local_docs_folder" in miss and "Next:" in miss
 
 
-@pytest.mark.parametrize(
-    ("doc", "want"),
-    [
-        ({}, []),
-        (
-            {"models": {"coder": "haiku"}},
-            ["OK   coder models: coder haiku, plugin_file_coder opus, coder_after_rejection opus"],
-        ),
-    ],
-)
-def test_config_coder_models_line(tmp_path: Path, doc: dict[str, object], want: list[str]) -> None:
-    # 0187: one line naming the three coder keys, only when one of them is set.
+def test_an_older_config_with_a_retired_coder_key_is_still_ok(tmp_path: Path) -> None:
+    # 332: the doctor prints no coder models line, and a schema 1 file holding the key reads OK.
     repo = tmp_path / "repo"
     _git_repo(repo)
-    (_data(repo) / "config.json").write_text(json.dumps(doc))
+    (_data(repo) / "config.json").write_text(
+        json.dumps({"schema": 1, "models": {"coder": "haiku"}})
+    )
     result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
-    lines = [line for line in result.stdout.splitlines() if line[5:].startswith("coder models:")]
-    assert lines == want, result.stdout
+    assert "OK   config.json" in result.stdout and "coder models" not in result.stdout
 
 
 def test_train_marker_absent_is_ok_none(tmp_path: Path) -> None:

@@ -121,7 +121,7 @@ def test_a_model_failure_after_begin_leaves_no_run_and_the_charter_on_its_branch
     def _bad(*_: object, **__: object) -> str:
         raise agent_models.AgentModelError("the agent file is unreadable. Next: fix the file.")
 
-    monkeypatch.setattr(train_runner, "resolve", _bad)
+    monkeypatch.setattr(train_runner, "resolve_model", _bad)
     refused = train_runner.open_run(root, "unattended")
     assert refused.code == 1 and refused.lines == [
         "the agent file is unreadable. Next: fix the file."

@@ -9,7 +9,7 @@ import fnmatch
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -48,6 +48,18 @@ PLACE_SHAPE = "place: <file>:<named part>"
 MAX_OPERATOR_CHECKS = 10
 OPERATOR_CHECKS_SHAPE = "write operator_checks: <plain-words check>[; ...]"
 _EDGE_KEYS = ("kind", "why", "files", "merge")
+# 0281: the needs table; `provide:` so it never reads as a unit line's `needs:` tool field.
+_PROVIDE_KEYS = ("kind", "provider", "when", "seen")
+PROVIDE_KINDS = ("permission", "secret", "resource", "account", "document", "other")
+BEFORE_MERGE = "user before merge"
+AFTER_DEPLOY = "user after deploy"
+EXISTS = "exists"
+PROVIDES_NONE = "provides: none"
+PROVIDE_SHAPE = (
+    "provide: <what> | kind: <kind> | provider: <unit id, user before merge, user after deploy "
+    "or exists> | when: <when it must exist>"
+)
+_PROVIDERS = "a unit id of this plan, user before merge, user after deploy or exists"
 _VERSION_KEYS = ("class", "reason", "unit")
 VERSION_CLASSES = ("X", "Y", "Z")
 _GLOB_CHARS = "*?["
@@ -150,6 +162,30 @@ class Version:
 
 
 @dataclass(frozen=True)
+class Provide:
+    # 0281: one row of the needs table; line is where it sat, never part of equality.
+    what: str
+    kind: str
+    provider: str
+    when: str
+    seen: str | None = None
+    line: int = field(default=0, compare=False)
+
+    @property
+    def by_user(self) -> bool:
+        return self.provider in (BEFORE_MERGE, AFTER_DEPLOY)
+
+    @property
+    def text(self) -> str:
+        # 0281: the row as the plan block writes it.
+        seen = f"{_SEP}seen: {self.seen}" if self.seen is not None else ""
+        return (
+            f"provide: {self.what}{_SEP}kind: {self.kind}{_SEP}provider: {self.provider}"
+            f"{_SEP}when: {self.when}{seen}"
+        )
+
+
+@dataclass(frozen=True)
 class Plan:
     units: tuple[Unit, ...]
     edges: tuple[Edge, ...]
@@ -158,6 +194,8 @@ class Plan:
     defects: tuple[str, ...]
     version: Version | None = None
     sections: tuple[Section, ...] = ()
+    provides: tuple[Provide, ...] = ()
+    provides_none: int = 0
 
     def section(self, uid: str) -> Section | None:
         return next((s for s in self.sections if s.unit == uid), None)
@@ -307,12 +345,32 @@ def _version(line: str, out: list[str]) -> Version:
     )
 
 
+def _provide(line: str, number: int, out: list[str]) -> Provide | None:
+    # 0281: provide: <what> | kind: | provider: | when: [| seen:]; a ` | ` in the text is a field.
+    head, *parts = line.split(_SEP)
+    what = head.partition(":")[2].strip()
+    if not what:
+        out.append(f"line {number} of the plan block is a provide line that names nothing: {line}")
+        return None
+    fields = _fields(parts, _PROVIDE_KEYS, f"provide {what}", out)
+    return Provide(
+        what,
+        fields.get("kind", ""),
+        fields.get("provider", ""),
+        fields.get("when", ""),
+        fields.get("seen"),
+        number,
+    )
+
+
 def _parse(block: list[str]) -> Plan:
     units: list[Unit] = []
     edges: list[Edge] = []
     pins: list[Pin] = []
     graphs: list[str] = []
     versions: list[Version] = []
+    provides: list[Provide] = []
+    nones = 0
     out: list[str] = []
     for number, raw in enumerate(block, 1):
         line = raw.strip()
@@ -335,10 +393,15 @@ def _parse(block: list[str]) -> Plan:
             graphs.append(line)
         elif kind == "version":
             versions.append(_version(line, out))
+        elif kind == "provide":
+            row = _provide(line, number, out)
+            provides.extend([row] if row is not None else [])
+        elif line == PROVIDES_NONE:
+            nones += 1
         else:
             out.append(
-                f"line {number} of the plan block is not a unit, edge, pin, version or graph "
-                f"line: {line}"
+                f"line {number} of the plan block is not a unit, edge, pin, version, graph, "
+                f"provide or {PROVIDES_NONE} line: {line}"
             )
     if len(graphs) > 1:
         out.append(f"the plan block has {len(graphs)} graph lines; keep exactly one.")
@@ -351,6 +414,8 @@ def _parse(block: list[str]) -> Plan:
         graphs[0] if graphs else None,
         tuple(out),
         versions[0] if versions else None,
+        provides=tuple(provides),
+        provides_none=nones,
     )
 
 
@@ -419,10 +484,7 @@ def loads(text: str) -> Plan:
     end = next((i for i in range(start, len(lines)) if lines[i].strip() == _FENCE_CLOSE), None)
     if end is None:
         return _empty("the fenced plan block has no closing fence.")
-    plan = _parse(lines[start:end])
-    return Plan(
-        plan.units, plan.edges, plan.pins, plan.graph, plan.defects, plan.version, _sections(lines)
-    )
+    return replace(_parse(lines[start:end]), sections=_sections(lines))
 
 
 def _known(plan: Plan) -> set[str]:
@@ -693,6 +755,57 @@ def _version_defects(plan: Plan) -> list[str]:
     return out
 
 
+def _provide_defects(plan: Plan) -> list[str]:
+    # 0281: unit ids match exactly, as edges, pins and the version line match them.
+    known = _known(plan)
+    kinds = ", ".join(PROVIDE_KINDS)
+    out: list[str] = []
+    if plan.provides_none > 1:
+        out.append(f"the plan block has {plan.provides_none} {PROVIDES_NONE} lines; keep one.")
+    if plan.provides_none and plan.provides:
+        out.append(
+            f"the plan block has {PROVIDES_NONE} beside {len(plan.provides)} provide line(s); "
+            f"keep the provide lines or the one {PROVIDES_NONE} line, not both."
+        )
+    for p in plan.provides:
+        label = f"provide {p.what}"
+        if p.kind not in PROVIDE_KINDS:
+            out.append(f"{label} has kind {p.kind or '(none)'}; use one of {kinds}.")
+        if not p.provider:
+            out.append(f"{label} names no provider; name {_PROVIDERS}.")
+        elif p.provider not in (BEFORE_MERGE, AFTER_DEPLOY, EXISTS) and p.provider not in known:
+            out.append(
+                f"{label} names the provider {p.provider}, which is no unit of this plan; "
+                f"name {_PROVIDERS}."
+            )
+        if not p.when:
+            out.append(f"{label} names no when; say when it must exist.")
+        if p.provider == EXISTS and not p.seen:
+            out.append(f"{label} has the provider {EXISTS} and names no seen; add seen: <where>.")
+        elif p.provider != EXISTS and p.seen is not None:
+            out.append(
+                f"{label} names seen: with the provider {p.provider or '(none)'}; only "
+                f"the provider {EXISTS} takes seen."
+            )
+    return out
+
+
+def provides_missing(plan: Plan) -> list[str]:
+    """0281: the plan step's check; validate() skips it so a plan recorded before still runs."""
+    if plan.provides or plan.provides_none:
+        return []
+    return [
+        f"the plan block has no provide line and no {PROVIDES_NONE} line; list each thing the "
+        f"work needs once it runs as {PROVIDE_SHAPE}, or write {PROVIDES_NONE}."
+    ]
+
+
+def provide_rows(provides: Sequence[Provide]) -> list[Provide]:
+    # 0281: the user's own needs first, before merge then after deploy, the rest in plan order.
+    rank = {BEFORE_MERGE: 0, AFTER_DEPLOY: 1}
+    return sorted(provides, key=lambda p: rank.get(p.provider, 2))
+
+
 def requirement_problem(text: str) -> str | None:
     # Pin REQ -> VER: one sentence ending in a period, naming a backticked token or a slash path.
     if not text.endswith("."):
@@ -889,7 +1002,7 @@ def validate(plan: Plan, max_concurrent: int, operator: Operator | None = None) 
         return defects or ["the plan block declares no units."]
     defects += _unit_defects(plan) + _edge_defects(plan) + _pin_defects(plan)
     defects += class_defects(plan, operator) if operator is not None else []
-    defects += _version_defects(plan) + _section_defects(plan)
+    defects += _version_defects(plan) + _provide_defects(plan) + _section_defects(plan)
     after = _serial(plan)
     cycle = _cycle(after)
     if cycle:

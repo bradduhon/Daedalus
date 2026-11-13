@@ -35,6 +35,13 @@ REQ_F1 = "Make `tests/test_u1.py::test_f1` pass."
 REQ_F3 = "Make `tests/test_u1.py::test_f3` pass."
 HEX64 = "[0-9a-f]{64}"
 HEX40 = "[0-9a-f]{40}"
+# 0281: needs lines fix-unit must keep byte for byte, one a unit provides and one the user.
+PROVIDES = (
+    "provide: write access to the reports bucket | kind: permission | provider: U1 | "
+    "when: before U2 runs\n"
+    "provide: the deploy key | kind: secret | provider: user after deploy | "
+    "when: before the first deploy\n"
+)
 
 
 def _plan(root: Path) -> Path:
@@ -45,6 +52,7 @@ def _fixture(root: Path) -> Path:
     # The shared run fixture with requirements the validator and the dispatch gate accept.
     made = shared_fixture(root)
     valid = PLAN.replace("1. Refuse x.\n2. Admit y.", "1. Refuse `x`.\n2. Admit `y`.")
+    valid = valid.replace("graph: ", f"{PROVIDES}graph: ", 1)
     _plan(made).write_text(valid, encoding="utf-8")
     _ok(train_runner.record_plan(made, _plan(made)))
     return made
@@ -82,14 +90,20 @@ def _rejected(root: Path, round_: int, *keys: str, train: str = TRAIN) -> None:
     train_state.update(root, train, verdict=verdict, audit_rounds=rounds)
 
 
+def _picked(root: Path, round_: int, *keys: str, word: str = "fix") -> list[str]:
+    # 339: the main session's record of the operator's pick, through the pick command itself.
+    return _ok(train_runner.record_pick(root, round_, list(keys), word))
+
+
 def _merged(root: Path) -> Path:
-    # 0230: both planned units built, verified and merged, then round 1 rejected.
+    # 0230: both planned units built, verified and merged, then round 1 rejected and picked.
     for uid in ("U1", "U2"):
         _ok(train_runner.dispatch_unit(root, uid))
         _verdict(root, _built(root, uid), VERIFIED_REPLY)
     _ok(train_runner.finish_unit(root, "U1"))
     _ok(train_runner.finish_unit(root, "U2"))
     _rejected(root, 1, "F1", "F2")
+    _picked(root, 1, "F1", "F2")
     return root
 
 
@@ -126,7 +140,8 @@ def test_fix_unit_writes_its_line_edge_section_and_graph(tmp_path: Path) -> None
         str(reqs),
     )
     assert code == 0, out
-    assert re.fullmatch(rf"fix-unit fix1-u1: fixes U1 plan sha256={HEX64}\n", out), out
+    want = rf"fix-unit fix1-u1: fixes U1 class=Plumbing \(from U1\) plan sha256={HEX64}\n"
+    assert re.fullmatch(want, out), out
     text = _plan(root).read_text(encoding="utf-8")
     block = text.split("```plan\n")[1].split("```")[0].splitlines()
     assert block[-3:] == [
@@ -135,9 +150,15 @@ def test_fix_unit_writes_its_line_edge_section_and_graph(tmp_path: Path) -> None
         "graph: units=3 critical_path=2 width=2 overlap_only=none",
     ]
     assert text.endswith(f"\n### fix1-u1: repair the guard\n\nRequirements:\n1. {REQ_F1}\n")
+    # 0281: the needs lines stay byte for byte, ahead of the fix unit's lines.
+    assert block[-5:-3] == PROVIDES.splitlines()
+    assert PROVIDES in text
     # The plan file validates, its hash is the recorded one, and the gate's plan check passes.
     done = run_cli("validate_plan.py", str(_plan(root)))
     assert done.returncode == 0 and done.stdout.startswith("OK plan: graph: units=3"), done.stdout
+    assert done.stdout.splitlines()[1:] == [
+        f"OK {line}" for line in reversed(PROVIDES.splitlines())
+    ], done.stdout
     state = train_state.load(root, TRAIN)
     sha = hashlib.sha256(_plan(root).read_bytes()).hexdigest()
     assert state["plan"] == {"path": str(_plan(root)), "sha256": sha} and sha in out
@@ -197,6 +218,23 @@ def test_a_fix_unit_waits_on_its_merge_check_like_any_unit(tmp_path: Path) -> No
     assert refused.code == 1 and "no recorded verifier verdict" in refused.lines[0], refused
 
 
+def test_a_fix_unit_commit_after_its_verified_route_is_refused(tmp_path: Path) -> None:
+    # 77: the judged tip binds a fix unit as it binds a planned unit.
+    root = _merged(_fixture(tmp_path / "repo"))
+    _ok(_fix(root))
+    _ok(train_runner.dispatch_unit(root, "fix1-u1"))
+    worktree = _built(root, "fix1-u1")
+    _verdict(root, worktree, VERIFIED_REPLY)
+    _ok(train_runner.route_unit(root, "fix1-u1", "VERIFIED"))
+    (worktree / "late.txt").write_text("late\n")
+    git(worktree, "add", "-A")
+    git(worktree, "commit", "-q", "-m", "late")
+    base = git(root, "rev-parse", f"daedalus/{TRAIN}").stdout.strip()
+    refused = train_runner.finish_unit(root, "fix1-u1")
+    assert refused.code == 1 and "after its VERIFIED reply" in refused.lines[0], refused
+    assert git(root, "rev-parse", f"daedalus/{TRAIN}").stdout.strip() == base
+
+
 def test_two_fix_units_the_second_fixing_the_first(tmp_path: Path) -> None:
     root = _merged(_fixture(tmp_path / "repo"))
     _ok(_fix(root))
@@ -204,8 +242,10 @@ def test_two_fix_units_the_second_fixing_the_first(tmp_path: Path) -> None:
     _verdict(root, _built(root, "fix1-u1"), VERIFIED_REPLY)
     _ok(train_runner.finish_unit(root, "fix1-u1"))
     _rejected(root, 2, "F3")
+    _picked(root, 2, "F3")
     second = _fix(root, "fix2-u1", ("fix1-u1",), ("F3",), reqs=(REQ_F3,))
-    assert re.fullmatch(rf"fix-unit fix2-u1: fixes fix1-u1 plan sha256={HEX64}", _ok(second)[0])
+    want = rf"fix-unit fix2-u1: fixes fix1-u1 class=Plumbing \(from fix1-u1\) plan sha256={HEX64}"
+    assert re.fullmatch(want, _ok(second)[0])
     text = _plan(root).read_text(encoding="utf-8")
     assert "edge: fix1-u1 -> fix2-u1 | kind: serial" in text
     assert "graph: units=4 critical_path=3 width=2 overlap_only=none" in text
@@ -232,11 +272,15 @@ def test_finish_unit_merges_one_fix_unit_while_another_waits(tmp_path: Path) -> 
     assert waiting.is_dir() and "Merge fix1-u1 for" in log and "Merge fix1-u2" not in log
 
 
-def test_the_main_session_alone_runs_fix_unit(marked_repo: Path) -> None:
-    # 0271: the orchestrator's train class does not name fix-unit, so only the main session runs it.
-    command = f"python3 {SCRIPTS_DIR / 'daedalus_train.py'} fix-unit --repo {marked_repo}"
-    assert jail.admitted(command, "main", str(marked_repo))
-    assert not decide(_b("orchestrator", command.replace(str(marked_repo), CWD)), CFG).allow
+def test_the_orchestrator_runs_fix_unit_and_only_the_main_session_runs_pick(
+    marked_repo: Path,
+) -> None:
+    # 339: fix-unit is on the orchestrator's train class; pick, the record it reads, is not.
+    for verb, orchestrator in (("fix-unit", True), ("pick", False)):
+        command = f"python3 {SCRIPTS_DIR / 'daedalus_train.py'} {verb} --repo {marked_repo}"
+        assert jail.admitted(command, "main", str(marked_repo))
+        payload = _b("orchestrator", command.replace(str(marked_repo), CWD))
+        assert decide(payload, CFG).allow is orchestrator, verb
 
 
 def test_a_fix_unit_can_answer_a_refuted_verifier_row(tmp_path: Path) -> None:
@@ -334,6 +378,7 @@ def test_the_state_print_marks_a_fix_unit(tmp_path: Path) -> None:
     plan.write_text(_plan(_fixture(tmp_path / "repo")).read_text(), encoding="utf-8")
     _ok(train_runner.record_plan(repo, plan))
     _rejected(repo, 1, "F1", train=train)
+    _picked(repo, 1, "F1")
     before = train_runner.state_lines(repo, plugin).lines
     _ok(_fix(repo))
     after = _ok(train_runner.state_lines(repo, plugin))

@@ -13,7 +13,7 @@ from lib.audit_proof import findings_path
 from lib.train_runner import FixUnit
 
 from tests.conftest import git, run_cli
-from tests.test_fix_units import _plan, _rejected, _reqs
+from tests.test_fix_units import _picked, _plan, _rejected, _reqs
 from tests.test_records_in_one_call import (
     PLAN,
     TRAIN,
@@ -112,6 +112,7 @@ def test_a_project_setting_that_lowers_the_class_lowers_the_auditor(tmp_path: Pa
 def test_a_fix_unit_with_the_highest_class_sets_the_auditor(tmp_path: Path) -> None:
     root = _merged(_run(tmp_path / "repo"), "U1", "U2")
     _rejected(root, 1, "F1")
+    _picked(root, 1, "F1")
     reqs = _reqs(root, "Make `tests/test_u1.py::test_f1` pass.")
     fix = FixUnit(
         "fix1-u1",
@@ -229,6 +230,7 @@ def test_a_raised_unit_raises_the_auditor_and_is_recorded(tmp_path: Path) -> Non
                 "raised": True,
             },
         },
+        "raised_keys": {"U2": ["web/u2.html:login work-class"]},
     }
     picked = train_state.load(root, TRAIN)[train_state.AUDITOR_MODEL]
     assert picked == {"model": "opus", "class": "AuthN", "unit": "U2", "raised_from": "Plumbing"}
@@ -355,6 +357,7 @@ def test_a_fix_unit_merged_after_the_check_needs_the_check_again(tmp_path: Path)
     _check_file(root, "U1 | Plumbing | class ok", "U2 | Plumbing | class ok")
     _ok(train_runner.auditor_model(root))
     _rejected(root, 1, "F1")
+    _picked(root, 1, "F1")
     reqs = _reqs(root, "Make `tests/test_u1.py::test_f1` pass.")
     fix = FixUnit("fix1-u1", "repair", ("tests/test_u1.py",), ("U1",), ("F1",), (), reqs)
     _ok(train_runner.fix_unit(root, fix))
@@ -443,4 +446,7 @@ def test_the_audit_skill_runs_the_class_check_then_the_model_then_round_one() ->
     auditor = (REPO_ROOT / "agents" / "auditor.md").read_text(encoding="utf-8")
     section = auditor.split("## Class check first (0280)\n", 1)[1].split("\n## ", 1)[0]
     assert section.count(". ") + section.count(".\n") <= 4
-    assert "opus" not in section and "function" not in section
+    # 349: "function" only beside the section and line range a document or investigation names.
+    clause = "the named part is a function, a section or a\nline range, never a sentence"
+    assert clause in section and section.count("function") == 1
+    assert "opus" not in section

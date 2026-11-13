@@ -5,6 +5,7 @@ One unit: local runs of the client need no setup.
 
 ```plan
 unit: U1 | title: default client token | files: src/client.py, tests/test_client.py | base: integration
+provides: none
 graph: units=1 critical_path=1 width=1 overlap_only=none
 ```
 

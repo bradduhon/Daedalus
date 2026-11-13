@@ -25,7 +25,7 @@ from lib.audit import (  # noqa: E402
     project_data_dir,
     project_root,
 )
-from lib.config import CODER_KEYS, Config, ConfigError, load_config  # noqa: E402
+from lib.config import Config, ConfigError, load_config  # noqa: E402
 from lib.ledger import RULES_SUMMARY_NAME, LedgerError, resolve_ledger, rules_summary  # noqa: E402
 from lib.manifest import (  # noqa: E402
     PRIORITY_WORDS,
@@ -508,12 +508,6 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
         return
     if cfg_path.exists():
         yield True, "OK   config.json"
-        if set(_json_keys(cfg_path, "models")) & set(CODER_KEYS):
-            # 0187: one line naming the coder's model for each of the three tiers.
-            tiers = ", ".join(
-                f"{key} {config.coder_models[tier]}" for key, tier in CODER_KEYS.items()
-            )
-            yield True, f"OK   coder models: {tiers}"
     else:
         # spec 9, 0076: config.json is optional; absence means the defaults.
         yield _opt(
@@ -849,17 +843,6 @@ def _git_repo_check(repo: Path, is_repo: bool, scope_name: str) -> tuple[bool, s
         "build, audit and release need a repository (0074, 0178)",
         "to use repository scope, run git init or point --repo at a clone",
     )
-
-
-def _json_keys(path: Path, *keys: str) -> list[str]:
-    # 0190: the keys of one nested object of a JSON file; unreadable or absent reads as none.
-    try:
-        node: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError):
-        return []
-    for key in keys:
-        node = node.get(key) if isinstance(node, dict) else None
-    return [str(name) for name in node] if isinstance(node, dict) else []
 
 
 def _repo_checks(

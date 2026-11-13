@@ -33,7 +33,7 @@ from lib.narrow import obj as _obj
 from lib.narrow import objects as _objects
 from lib.narrow import strings as _strings
 from lib.narrow import text as _text
-from lib.plan_record import Version
+from lib.plan_record import BEFORE_MERGE, Plan, Provide, Version, provide_rows
 
 NOTES_FILE = "summary-notes.md"
 # pin D1 -> E4: the ledger record `daedalus_train.py ledger` writes, and the pending line.
@@ -563,7 +563,8 @@ def _header(
                     "rerun summary."
                 )
             lines.append(f"Migration: {_note(migration, repo, charter, 'Migration line')}")
-    return lines
+    # 0276: words and reasons from fixed tables only, so the line needs no public check.
+    return [*lines, train_state.orchestrating_line(state, "Orchestrating model")]
 
 
 def _note(text: str, repo: Path, charter: Path | None, row: str) -> str:
@@ -698,6 +699,23 @@ def _fixes(
     return ["## Fix units"] + [
         f"- {_cell(line, repo, None, where)} refutations={counts.get(uid, 0)}"
         for uid, line in marks
+    ]
+
+
+TO_PROVIDE = "## What you still have to provide"
+
+
+def _to_provide(provides: Sequence[Provide], repo: Path, charter: Path | None) -> list[str]:
+    # 0281: printed only when the plan names a need the user provides, so other runs read as before.
+    mine = [p for p in provides if p.by_user]
+    if not mine:
+        return []
+    where = "the recorded plan's provide lines"
+    return [TO_PROVIDE] + [
+        f"- {'Before merge' if p.provider == BEFORE_MERGE else 'After deploy'}: "
+        f"{_cell(p.what, repo, charter, where)} ({_cell(p.kind, repo, charter, where)}), "
+        f"needed {_cell(p.when, repo, charter, where)}"
+        for p in mine
     ]
 
 
@@ -888,6 +906,7 @@ def render(
     notes: Notes,
     policy_declared: bool,
     version: Version | None,
+    provides: Sequence[Provide] = (),
 ) -> str:
     # W3.2: logs[0] is the session that runs the command; the proof reads its Session line first.
     from audit_report import ReportError, _totals, md_escape
@@ -899,6 +918,7 @@ def render(
     facts = _gather([*logs[1:], *logs[:1]], units)
     labels = {_text(u, "name"): _text(u, "name").removeprefix(f"{train_id}-") for u in units}
     lines = _header(repo, train_id, state, notes, policy_declared, version)
+    lines += _to_provide(provide_rows(provides), repo, charter)
     accepted = _accepted(state, repo, charter)
     rulings = _noted(notes, "Rulings", "none", repo, charter)
     lines += ["## Rulings", *([] if accepted and rulings == ["none"] else rulings), *accepted]
@@ -1019,15 +1039,15 @@ def read_notes(repo: Path, train_id: str) -> Notes:
     return parse_notes(text, where)
 
 
-def plan_version(state: dict[str, object]) -> Version | None:
-    # pin D4 -> D5: the recorded plan's optional version line.
+def recorded_plan(state: dict[str, object]) -> Plan | None:
+    # pin D4 -> D5, 0281: the recorded plan, for its version line and its provide lines.
     from lib.plan_record import PlanError, load
 
     raw = _text(train_state.record(state, train_state.PLAN), "path")
     if not raw:
         return None
     try:
-        return load(Path(raw)).version
+        return load(Path(raw))
     except PlanError as exc:
         raise SummaryError(f"{exc} Next: restore the recorded plan, then rerun summary.") from exc
 
@@ -1052,9 +1072,10 @@ def write_summary(repo: Path, train_id: str, session: str | None) -> str:
         declared = load_config(cwd=str(repo)).policy is not None
     except ConfigError as exc:
         raise SummaryError(str(exc)) from exc
-    text = render(
-        repo, train_id, state, load_logs(repo, state, session), notes, declared, plan_version(state)
-    )
+    plan = recorded_plan(state)
+    logs = load_logs(repo, state, session)
+    version, provides = (plan.version, plan.provides) if plan is not None else (None, ())
+    text = render(repo, train_id, state, logs, notes, declared, version, provides)
     path = summary_path(repo, train_id)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -453,6 +453,23 @@ def test_approved_reads_the_tip_from_the_auditor_hand_back(
     assert approved(repo_cwd, TRAIN) == _ok(seq, tip)
 
 
+def test_approved_accepts_a_final_round_from_a_new_auditor_agent(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 0278: each later round is a new auditor; the proof reads the auditor type, never one agent.
+    tip = _judged(repo_cwd)
+    replayed = replay_auditor(repo_cwd, "sess-test")
+    _handback(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    seq = _log_len(repo_cwd)
+    records = read_chain(audit.log_path("sess-test", str(repo_cwd)))
+    agents = {r["agent_id"] for r in records if r.get("agent_type") == "daedalus:auditor"}
+    assert agents == {replayed[0]["agent_id"], "a1"}
+    _record_seq(repo_cwd, seq)
+    _summary_run(hook_input, repo_cwd)
+    _summary(repo_cwd)
+    assert approved(repo_cwd, TRAIN) == _ok(seq, tip)
+
+
 def test_approved_refuses_train_a_without_its_hand_back_records(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:

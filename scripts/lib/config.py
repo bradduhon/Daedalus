@@ -15,7 +15,7 @@ from lib.audit import check_project_data_dir
 from lib.credential_paths import credential_roots
 from lib.operator_file import OperatorError, validate
 from lib.project_root import in_git_work_tree
-from lib.settings_maps import SCHEMA_KEY, current, number_problem
+from lib.settings_maps import SCHEMA_KEY, current, number_problem, upgrade
 from lib.train_scope import KNOWN_AGENTS
 from lib.user_keys import USER_KEY_NOTE, unknown_keys, without_user_keys
 
@@ -43,18 +43,8 @@ CONFIG_KEYS = (
 )
 MODEL_KEYS = (
     "agents",
-    "coder",
-    "plugin_file_coder",
-    "coder_after_rejection",
     "fable_available",
 )
-# 0245: each coder model key and the coder tier it sets; 0267: no run reads them, the class does.
-CODER_KEYS = {
-    "coder": "default",
-    "plugin_file_coder": "control_path",
-    "coder_after_rejection": "escalated",
-}
-DEFAULT_CODER_MODELS = {"default": "sonnet", "control_path": "opus", "escalated": "opus"}
 LIMIT_KEYS = ("parallel_coders", "task_tokens", "log_retention_days")
 # 0245: a coding rules entry's one key and the standards source kind it names.
 RULE_SOURCE_KEYS = {"folder": "rules-dir", "file": "file", "builtin": "pack"}
@@ -104,8 +94,6 @@ class Config:
     wrapper_read_roots: tuple[str, ...] = field(default_factory=tuple)
     # 0209: total tokens per unit, coders plus verifiers; None leaves the gate off.
     unit_token_budget: int | None = None
-    # 0245: the coder model keys as read; 0267: a run takes a unit's model from its class instead.
-    coder_models: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CODER_MODELS))
     # 0217: true or false settles Fable for the preferring agents; None leaves it to the session.
     fable_available: bool | None = None
     agent_models: dict[str, str] = field(default_factory=dict)
@@ -299,22 +287,6 @@ def _wrapper_read_roots(raw: dict[str, object], dot_claude: Path) -> tuple[str, 
                 )
         out.append(path)
     return tuple(out)
-
-
-def _coder_models(raw: dict[str, object]) -> dict[str, str]:
-    # 0187, 0245: each coder model key sets one coder tier; a key left out keeps its default.
-    out = dict(DEFAULT_CODER_MODELS)
-    for key, tier in CODER_KEYS.items():
-        model = raw.get(key)
-        if model is None:
-            continue
-        if model not in MODELS:
-            raise ConfigError(
-                f"config.json models.{key} is {model!r}. "
-                f"Next: set models.{key} to one of {', '.join(MODELS)}, or remove it."
-            )
-        out[tier] = str(model)
-    return out
 
 
 def _policy(raw: object) -> PolicyDecl:
@@ -531,6 +503,10 @@ def parse_config(raw: object, target: Path) -> Config:
     problem = number_problem(raw[SCHEMA_KEY], current("config")) if SCHEMA_KEY in raw else None
     if problem is not None:
         raise ConfigError(f"{target} {problem}")
+    number = raw.get(SCHEMA_KEY)
+    if isinstance(number, int) and number < current("config"):
+        # 332: an older file reads through the schema map, so a dropped key never stops a run.
+        raw = upgrade(raw, "config", lambda _doc: True).doc
     models = _group(target, raw, "models", MODEL_KEYS)
     limits = _group(target, raw, "limits", LIMIT_KEYS)
     # 0076: null is not declared, the same as an absent key; the setup starter writes null.
@@ -543,7 +519,6 @@ def parse_config(raw: object, target: Path) -> Config:
         audit_retention_days=_retention_days(limits),
         wrapper_read_roots=_wrapper_read_roots(raw, target.parent.parent),
         unit_token_budget=_unit_budget(limits),
-        coder_models=_coder_models(models),
         fable_available=_fable_available(models),
         agent_models=_agent_models(models),
         operator=_operator(raw),
