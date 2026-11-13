@@ -342,6 +342,16 @@ FILES: tuple[Entry, ...] = (
         "daedalus_train.py dispatch or finish-unit --next starts a unit with no brief yet (0230)",
     ),
     Entry(
+        f"{_SCRATCH}/<train-id>/plan.md",
+        "scripts/lib/train_runner.py:_fix_lines",
+        "daedalus_train.py fix-unit adds a fix unit to the recorded plan, after every check (0271)",
+    ),
+    Entry(
+        f"{_SCRATCH}/<train-id>/plan.md",
+        "scripts/lib/train_runner.py:_restore",
+        "daedalus_train.py fix-unit cannot record the new plan hash; the old bytes go back (0271)",
+    ),
+    Entry(
         f"{_SCRATCH}/<train-id>/briefs/<unit-slug>.md",
         "scripts/lib/train_runner.py:write_refresh",
         "daedalus_workspace.py lock revises the contract; each open brief's Contract line (0261)",

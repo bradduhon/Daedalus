@@ -543,6 +543,38 @@ def graph_line(plan: Plan, max_concurrent: int) -> str:
     )
 
 
+def _block_bounds(lines: list[str]) -> tuple[int, int]:
+    # 0271: the open and close fence of the one plan block, as loads() finds them.
+    opens = [i for i, line in enumerate(lines) if line.strip() == _FENCE_OPEN]
+    if len(opens) != 1:
+        raise PlanError(f"the plan file holds {len(opens)} fenced plan blocks, not exactly one.")
+    end = next(
+        (i for i in range(opens[0] + 1, len(lines)) if lines[i].strip() == _FENCE_CLOSE), None
+    )
+    if end is None:
+        raise PlanError("the fenced plan block has no closing fence.")
+    return opens[0], end
+
+
+def add_unit(text: str, block_lines: Sequence[str], section: str, max_concurrent: int) -> str:
+    """0271: block lines added before a recomputed graph line, and a section appended."""
+    lines = text.splitlines(keepends=True)
+    start, end = _block_bounds([line.rstrip("\r\n") for line in lines])
+    inside = range(start + 1, end)
+    graphs = [i for i in inside if lines[i].strip().partition(":")[0] == "graph"]
+    if len(graphs) > 1:
+        raise PlanError(f"the plan block has {len(graphs)} graph lines; keep exactly one.")
+    at = graphs[0] if graphs else end
+    added = [f"{line}\n" for line in block_lines]
+    kept = [lines[i] for i in inside if i not in graphs]
+    without = "".join([*lines[: start + 1], *kept, *added, *lines[end:]])
+    graph = f"{graph_line(loads(without), max_concurrent)}\n"
+    body = [*lines[:at], *added, graph, *lines[at + 1 if graphs else at :]]
+    joined = "".join(body)
+    tail = "" if joined.endswith("\n") or not joined else "\n"
+    return f"{joined}{tail}\n{section.rstrip()}\n"
+
+
 def _covers(pattern: str, path: str) -> bool:
     # 0086: a trailing slash names a folder; a glob character names a pattern.
     if pattern.endswith("/"):

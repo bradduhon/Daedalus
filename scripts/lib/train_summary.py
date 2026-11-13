@@ -681,6 +681,26 @@ def _units(
     return lines
 
 
+def _fixes(
+    state: dict[str, object], units: Sequence[dict[str, object]], train_id: str, repo: Path
+) -> list[str]:
+    # 0271: printed only when the run made a fix unit, so a run without one reads as before.
+    marks = train_state.fix_lines(state)
+    if not marks:
+        return []
+    counts: dict[str, int] = {}
+    for u in units:
+        raw = u.get("refutations")
+        counts[_text(u, "name").removeprefix(f"{train_id}-")] = (
+            len(raw) if isinstance(raw, list) else 0
+        )
+    where = "the train state fix units"
+    return ["## Fix units"] + [
+        f"- {_cell(line, repo, None, where)} refutations={counts.get(uid, 0)}"
+        for uid, line in marks
+    ]
+
+
 def _exempted(exempt: dict[str, object], repo: Path, charter: Path | None) -> list[str]:
     # 0133, 0139: each exempted finding with its ledger id and tracking; 0142: untracked ones
     # carry a Deviation: line naming the finding and its exemption row.
@@ -839,6 +859,7 @@ def render(
     lines += ["## Rulings", *([] if accepted and rulings == ["none"] else rulings), *accepted]
     lines += _priorities(repo, state, logs, charter)
     lines += _units(repo, train_id, units, facts)
+    lines += _fixes(state, units, train_id, repo)
     lines.append("## Verification")
     verified = [
         f"- {labels[n]}: {_cell(line, repo, charter, where)}"

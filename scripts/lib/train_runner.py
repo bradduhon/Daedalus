@@ -15,7 +15,7 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from lib import (
@@ -60,7 +60,7 @@ from lib.audit_proof import (
     tip_problem,
     verdict_tip,
 )
-from lib.config import ConfigError, load_config
+from lib.config import DEFAULT_MAX_CONCURRENT_BUILDERS, ConfigError, load_config
 from lib.jail import CoderBoundary, _coder_boundary, normalize_agent, protected_reason
 from lib.narrow import integer as _int
 from lib.narrow import obj as _obj
@@ -1386,7 +1386,7 @@ def record_plan(cwd: Path, path: Path) -> Outcome:
             raise RunnerError(refusal)
 
         def change(state: dict[str, object]) -> None:
-            record = {"path": str(target), "sha256": sha}
+            record = _plan_entry(target, sha)
             if state.get(train_state.PLAN) == record:
                 return
             # 0156, 0089: a no-contract lock holds only for the plan it was taken on.
@@ -2204,6 +2204,290 @@ def finish_unit(
             raise RunnerError(str(exc)) from exc
 
     return _with_next(_recorded(cwd, edit), "finish-unit")
+
+
+@dataclass(frozen=True)
+class FixUnit:
+    # 0271: one fix unit as the caller names it; requirements is the file of requirement lines.
+    uid: str
+    title: str
+    files: tuple[str, ...]
+    fixes: tuple[str, ...]
+    findings: tuple[str, ...]
+    rows: tuple[int, ...]
+    requirements: Path
+    work_class: str | None = None
+    place: str | None = None
+    class_reason: str | None = None
+
+
+FIX_NEXT = "Next: correct the input named above, then rerun fix-unit."
+
+
+def _plan_entry(target: Path, sha: str) -> dict[str, str]:
+    # 0086, 0271: the one plan record shape; plan and fix-unit both write it.
+    return {"path": str(target), "sha256": sha}
+
+
+def _fix_requirements(fix: FixUnit) -> list[str]:
+    # 0271: one requirement per finding and row, in that order, from the caller's file.
+    try:
+        text = fix.requirements.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RunnerError(
+            f"the requirements file {fix.requirements} could not be read ({exc}). {FIX_NEXT}"
+        ) from exc
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    want = len(fix.findings) + len(fix.rows)
+    if len(lines) != want:
+        raise RunnerError(
+            f"the requirements file {fix.requirements} holds {len(lines)} requirement lines, and "
+            f"fix unit {fix.uid} answers {want} findings and rows, one requirement each. "
+            "Next: write one requirement line per --finding, then per --row, in that order, "
+            "then rerun fix-unit."
+        )
+    return lines
+
+
+def _fix_shape(fix: FixUnit, train_id: str) -> None:
+    if not workspace._NAME.fullmatch(fix.uid) or train_state.is_audit_unit(
+        {"name": f"{train_id}-{fix.uid}"}
+    ):
+        raise RunnerError(
+            f"fix unit id {fix.uid} is not a worktree name of lowercase letters, digits and "
+            "hyphens, or it names the audit worktree. Next: name it fix<n>-<unit slug>, then "
+            "rerun fix-unit."
+        )
+    named = (
+        ("title", fix.title),
+        ("class", fix.work_class),
+        ("place", fix.place),
+        ("class-reason", fix.class_reason),
+    )
+    for label, value in named:
+        if value is not None:
+            _one_line(label, value, "fix-unit")
+    if not fix.files or not all(f and f.isprintable() for f in fix.files):
+        raise RunnerError(f"--files names no file, or a file that is not printable. {FIX_NEXT}")
+    if not fix.findings and not fix.rows:
+        raise RunnerError(
+            f"fix unit {fix.uid} answers no finding and no row. Next: name each audit finding "
+            "with --finding, or each refuted verifier row with --row, then rerun fix-unit."
+        )
+    if fix.rows and len(fix.fixes) != 1:
+        raise RunnerError(
+            f"--row names a row of one unit's refuted verifier verdict, and this call fixes "
+            f"{len(fix.fixes)} units. Next: give one --fixes with --row, then rerun fix-unit."
+        )
+    for label, given in (("--fixes", fix.fixes), ("--finding", fix.findings), ("--row", fix.rows)):
+        if len(set(given)) != len(given):
+            raise RunnerError(f"{label} names one value twice. {FIX_NEXT}")
+
+
+def _fix_answers(
+    repo: Path, train_id: str, state: dict[str, object], fix: FixUnit
+) -> dict[str, object]:
+    # 0271: each claimed finding is a key of the recorded rejected round, each row a row of the
+    # fixed unit's newest refuted verifier verdict; the tree records nothing finer.
+    entry: dict[str, object] = {"fixes": list(fix.fixes)}
+    if fix.findings:
+        verdict = train_state.record(state, train_state.VERDICT)
+        round_ = _int(verdict, "round", 0)
+        if verdict.get("status") != train_state.REJECTED or round_ < 1:
+            raise RunnerError(
+                f"run {train_id} records no rejected audit verdict, so no finding waits for a "
+                "fix. Next: record the rejected round with daedalus_train.py verdict, then "
+                "rerun fix-unit."
+            )
+        try:
+            keys = round_keys(repo, train_id, state, round_)
+        except ProofError as exc:
+            raise RunnerError(str(exc)) from exc
+        missing = [key for key in fix.findings if key not in keys]
+        if missing:
+            raise RunnerError(
+                f"finding {missing[0]!r} is not in the rejected round {round_}. Next: rerun "
+                "fix-unit with finding keys from the round's findings file."
+            )
+        entry.update({"findings": list(fix.findings), "round": round_})
+    if fix.rows:
+        unit = _unit_record(state, train_id, fix.fixes[0])
+        try:
+            records = workspace._audit_records(repo, state)
+        except workspace.WorkspaceError as exc:
+            raise RunnerError(str(exc)) from exc
+        reply = workspace.newest_verdict(records, Path(str(unit["path"])))
+        seq, line = reply if reply is not None else (None, "")
+        listed = workspace.refuted_rows(line) or []
+        if not isinstance(seq, int) or isinstance(seq, bool) or not listed:
+            raise RunnerError(
+                f"the newest verifier verdict on unit {fix.fixes[0]} is not a {REFUTED_PREFIX} "
+                "with rows, so no row waits for a fix. Next: rerun fix-unit with --finding, or "
+                "after the verifier refutes the unit."
+            )
+        outside = [n for n in fix.rows if not 1 <= n <= len(listed)]
+        if outside:
+            raise RunnerError(
+                f"--row {outside[0]} is outside the {len(listed)} refuted rows of unit "
+                f"{fix.fixes[0]} at seq {seq}. Next: rerun fix-unit with rows from 1 to "
+                f"{len(listed)}."
+            )
+        entry.update({"rows": list(fix.rows), "seq": seq})
+    return entry
+
+
+def _fix_text(
+    old: plan_record.Plan, text: str, fix: FixUnit, lines: list[str], cap: int
+) -> tuple[str, plan_record.Plan]:
+    # 0271: the plan with the fix unit added, read back and compared with what was given.
+    fields = [
+        f"unit: {fix.uid}",
+        f"title: {fix.title}",
+        f"files: {', '.join(fix.files)}",
+        f"base: {plan_record.INTEGRATION}",
+    ]
+    for key, value in (
+        ("class", fix.work_class),
+        ("place", fix.place),
+        ("class_reason", fix.class_reason),
+    ):
+        fields += [f"{key}: {value}"] if value is not None else []
+    why = {f: f"{fix.uid} fixes {f} and builds on its merged work" for f in fix.fixes}
+    edges = [
+        f"edge: {f} -> {fix.uid} | kind: {plan_record.SERIAL} | why: {why[f]}" for f in fix.fixes
+    ]
+    numbered = [f"{n}. {line}" for n, line in enumerate(lines, 1)]
+    section = "\n".join([f"### {fix.uid}: {fix.title}", "", plan_record.REQUIREMENTS, *numbered])
+    try:
+        new_text = plan_record.add_unit(text, [" | ".join(fields), *edges], section, cap)
+    except plan_record.PlanError as exc:
+        raise RunnerError(f"{exc} Next: fix the plan block, then rerun fix-unit.") from exc
+    new = plan_record.loads(new_text)
+    want = plan_record.Unit(
+        fix.uid,
+        fix.title,
+        fix.files,
+        plan_record.INTEGRATION,
+        work_class=fix.work_class,
+        place=fix.place,
+        class_reason=fix.class_reason,
+    )
+    made = [
+        plan_record.Edge(f, "->", fix.uid, plan_record.SERIAL, why[f], (), None) for f in fix.fixes
+    ]
+    kept = [(s.unit, s.requirements) for s in old.sections]
+    read = [(s.unit, s.requirements) for s in new.sections]
+    if (
+        len(new.units) != len(old.units) + 1
+        or set(new.units) != {*old.units, want}
+        or set(new.edges) != {*old.edges, *made}
+        or (new.pins, new.version) != (old.pins, old.version)
+        or read != [*kept, (fix.uid, tuple(lines))]
+    ):
+        raise RunnerError(
+            f"the plan with fix unit {fix.uid} does not read back as the unit, edges and "
+            "requirements given. Next: keep each value on one line with no ` | ` and each file "
+            "name free of commas, then rerun fix-unit."
+        )
+    return new_text, new
+
+
+def _restore(target: Path, text: str, cause: str) -> None:
+    # 0271: a failed record puts the plan file back as it was recorded.
+    try:
+        atomic.write_atomic(target, text)
+    except OSError as exc:
+        raise RunnerError(
+            f"{cause}\nthe plan file {target} could not be put back ({exc}). Next: restore it "
+            "from the recorded sha256, then rerun fix-unit."
+        ) from exc
+
+
+def _fix_lines(repo: Path, train_id: str, fix: FixUnit) -> list[str]:
+    _fix_shape(fix, train_id)
+    state = train_state.load(repo, train_id)
+    recorded = train_state.record(state, train_state.PLAN)
+    data = _plan_bytes(state, True)
+    if data is None:
+        raise RunnerError(
+            f"run {train_id} records no plan, so no fix unit can join it. Next: record the plan "
+            "with daedalus_train.py plan --path, then rerun fix-unit."
+        )
+    target = Path(_text(recorded, "path"))
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RunnerError(f"the plan {target} is not UTF-8 ({exc}). {FIX_NEXT}") from exc
+    old = plan_record.loads(text)
+    known = {u.id.casefold(): u.id for u in old.units}
+    if fix.uid.casefold() in known:
+        raise RunnerError(
+            f"the recorded plan already names unit {fix.uid}. Next: give the fix unit a new id, "
+            "then rerun fix-unit."
+        )
+    absent = [f for f in fix.fixes if f.casefold() not in known]
+    if absent:
+        raise RunnerError(
+            f"the recorded plan names no unit {absent[0]}, so fix unit {fix.uid} cannot fix it. "
+            "Next: pass unit ids the recorded plan names with --fixes, then rerun fix-unit."
+        )
+    fix = replace(fix, fixes=tuple(known[f.casefold()] for f in fix.fixes))
+    entry = _fix_answers(repo, train_id, state, fix)
+    lines = _fix_requirements(fix)
+    if state.get(train_state.CONTRACT_SKIP) is True and state.get("packet_version") is None:
+        # 0182, 0271: the contract skip was judged on these files; a fix unit stays inside them.
+        allowed = {posixpath.normpath(f) for u in old.units for f in u.files}
+        outside = [f for f in fix.files if posixpath.normpath(f) not in allowed]
+        if outside:
+            raise RunnerError(
+                f"this run skipped the contract for the plan's files, and fix unit {fix.uid} "
+                f"names {outside[0]}, outside them. Next: fix inside the plan's files, or stop "
+                "the run and start one whose plan declares the contract."
+            )
+    cap = _int(state, "max_concurrent_builders", DEFAULT_MAX_CONCURRENT_BUILDERS)
+    new_text, new = _fix_text(old, text, fix, lines, cap)
+    operator = None
+    if plan_record.has_class_fields(new):
+        # 0280: the plan step's class checks, read from the same settings it reads.
+        try:
+            operator = operator_file.load(repo)
+        except (operator_file.OperatorError, ConfigError, DataDirError) as exc:
+            raise RunnerError(f"{exc}\n{FIX_NEXT}") from exc
+    defects = plan_record.validate(new, cap, operator)
+    if defects:
+        raise RunnerError("\n".join([*defects, "Next: correct the fix unit's inputs, then rerun."]))
+    sha = _sha256(new_text.encode("utf-8"))
+
+    def change(state: dict[str, object]) -> None:
+        if state.get(train_state.PLAN) != recorded:
+            raise RunnerError(
+                f"run {train_id} recorded another plan while fix-unit ran. Next: run fix-unit "
+                "again, so it reads the plan the run now records."
+            )
+        state[train_state.PLAN] = _plan_entry(target, sha)
+        fixes = train_state.record(state, train_state.FIX_UNITS)
+        fixes[fix.uid] = entry
+        state[train_state.FIX_UNITS] = fixes
+
+    try:
+        # 0271: written only after every check; os.replace leaves the old file on a failure.
+        atomic.write_atomic(target, new_text)
+    except OSError as exc:
+        raise RunnerError(f"cannot write the plan {target} ({exc}). {FIX_NEXT}") from exc
+    try:
+        train_state.change(repo, train_id, change)
+    except (RunnerError, train_state.TrainStateError) as exc:
+        _restore(target, text, str(exc))
+        raise
+    return [f"fix-unit {fix.uid}: fixes {', '.join(fix.fixes)} plan sha256={sha}"]
+
+
+def fix_unit(cwd: Path, fix: FixUnit) -> Outcome:
+    # 0271: a fix unit joins the recorded plan, so every unit command takes it as planned.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        return _fix_lines(repo, train_id, fix)
+
+    return _with_next(_recorded(cwd, edit), "fix-unit")
 
 
 def _exemption_args(
@@ -3073,6 +3357,8 @@ def state_lines(cwd: Path, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
             f"stage: {at} ({min(index + 1, len(stages))} of {len(stages)})",
             f"waiting on: {', '.join(_text(d, 'brief') for d in open_) or 'nothing'}",
             f"halted: {_text(session.state, 'halted') or 'no'}",
+            # 0271: one line per fix unit, naming what it fixes and answers.
+            *(f"fix unit: {line}" for _, line in train_state.fix_lines(session.state)),
         ],
     )
 
