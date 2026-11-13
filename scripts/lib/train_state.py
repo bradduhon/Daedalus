@@ -60,6 +60,10 @@ FIX_UNITS = "fix_units"
 CLASS_CHECK = "class_check"
 # 0280: {"model", "class", "unit", "raised_from"}, the audit's model and the unit that set it.
 AUDITOR_MODEL = "auditor_model"
+# 0278: {"<round>": "<model>"}, the model each audit round's new auditor starts on.
+AUDITOR_MODELS = "auditor_models"
+# 0278: {"<round>": ["<place> | rule: <rule>"]}, a rejected round's places from its auditor reply.
+AUDIT_PLACES = "audit_places"
 # 0284: on a unit, {"<agent id>": {"tokens": n} or {"reason": label}} at the agent's last return.
 SIZES = "context_sizes"
 # 0284: on a unit, [{"old", "tokens", "file", "new"}] in order; run-wide for an agent with no unit.

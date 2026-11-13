@@ -591,7 +591,7 @@ def test_auditor_judges_what_a_change_makes_reachable() -> None:
     for phrase in (
         "Trust model: attacker input is anything a coder can commit",
         "scope is the diff plus what it makes reachable",
-        "Every round judges the full diff from `<diff base>`",
+        "Round 1 judges the full diff from `<diff base>`",
         "reading alone never closes it",
         "never a real key",
         "`[STATUS: YIELD_WEB] <tool> options and config files`",
@@ -608,7 +608,7 @@ def test_auditor_judges_what_a_change_makes_reachable() -> None:
         "Reachability pass, before round 1",
         "`Hunt: can <attacker input> reach <protected thing> after <unit>?`",
         "never mark a lead optional or the auditor's to drop",
-        "A later round judges the full diff from `<base sha>` again",
+        "A later round reads that range and rereads each place, and nothing else",
     ):
         assert phrase in recipe, phrase
 
@@ -631,7 +631,8 @@ def test_auditor_short_form_measures_first_and_keeps_the_gate() -> None:
         "and both verdict lines",
         "Skip the rank by readers, the reachable scope with its `Reachable:` and `Hunt:` lines, "
         "and the adversarial corpus run",
-        "A later round after a fix takes the full procedure.",
+        "A later round after a fix takes the full procedure on the range and places its "
+        "dispatch names (Later round).",
     ):
         assert phrase in short, phrase
     assert text.index("## Short form (0166, 0175)") < text.index("## Procedure")
@@ -767,7 +768,9 @@ CLASS_CHECK = "[STATUS: CLASS_CHECK] path=<path>"
 
 def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
     # pin C1 -> C3: first and last line `[VERDICT: <word>] tip=<40 lowercase hex>`.
+    # 0278: the later round section follows the contract at the end of the file.
     contract = AUDITOR.read_text().split("## Status contract\n", 1)[1]
+    contract = contract.split("\n## Later round\n", 1)[0]
     tip = "tip=<40 lowercase hex>"
     assert contract == (
         "Your reply starts with exactly one of these verdict lines as its first line and ends with"

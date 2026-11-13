@@ -453,7 +453,7 @@ def test_recipe_handles_the_reaudit_and_ledger_resume_messages() -> None:
         PLUGIN + "daedalus_train.py verdict --repo <repo> --status approved --round <n> "
         "--findings <findings path> --tip <judged tip>`"
     )
-    order = [refresh, "resume the auditor with the step 5 items", approved, "the summary command"]
+    order = [refresh, "dispatch a new `auditor` on the model", approved, "the summary command"]
     places = [audit.index(part) for part in order]
     assert places == sorted(places)
     assert PLUGIN + "daedalus_workspace.py refresh --repo <repo> --name <train-id>-audit`" in (
