@@ -1178,8 +1178,8 @@ UNSETTABLE: tuple[Unsettable, ...] = (
 class Overlap:
     id: str
     text: str
-    # 0242: (path, line, words on that line) the answer rests on; a test rereads each line.
-    sources: tuple[tuple[str, int, str], ...]
+    # 0242: (path, words of one line) the answer rests on; the words occur once in the file.
+    sources: tuple[tuple[str, str], ...]
     # 0242: the file form whose value wins, or None where no code decides yet.
     wins: str | None
 
@@ -1190,7 +1190,7 @@ OVERLAPS: tuple[Overlap, ...] = (
         "docs",
         "When this checkout's config names a docs folder kept elsewhere on this machine, the "
         "decisions file lives there, not in the project's own docs folder.",
-        (("scripts/lib/ledger.py", 65, "kept elsewhere on this machine wins"),),
+        (("scripts/lib/ledger.py", "kept elsewhere on this machine wins"),),
         "config",
     ),
     Overlap(
@@ -1199,8 +1199,8 @@ OVERLAPS: tuple[Overlap, ...] = (
         "reading level is checked but nothing reads it yet. Once it is read, it will apply "
         "only to a project that sets no reading level of its own.",
         (
-            ("scripts/lib/briefs.py", 281, "manifest.docs.literacy"),
-            ("scripts/lib/operator_file.py", 4, "no check or hook acts on it yet"),
+            ("scripts/lib/briefs.py", "manifest.docs.literacy"),
+            ("scripts/lib/operator_file.py", "no check or hook acts on it yet"),
         ),
         None,
     ),
@@ -1212,15 +1212,11 @@ OVERLAPS: tuple[Overlap, ...] = (
         "Self-Assessment and Developer Profile switches, the work classes, the class mapping "
         "and the context limit; nothing acts yet on the project's copy of any other value.",
         (
-            (
-                "scripts/lib/operator_file.py",
-                238,
-                "a key the override sets replaces the base value",
-            ),
-            ("scripts/lib/train_runner.py", 1529, "operator = operator_file.load(repo)"),
-            ("scripts/lib/self_assessment.py", 49, "load(project_root(Path(path)))"),
-            ("scripts/lib/developer_profile.py", 51, "load(project_root(Path(repo_root)))"),
-            ("scripts/lib/handoff.py", 103, "overlay(load_user(), config.operator).context_limit"),
+            ("scripts/lib/operator_file.py", "a key the override sets replaces the base value"),
+            ("scripts/lib/train_runner.py", "model = work_classes.model_for(name, operator)"),
+            ("scripts/lib/self_assessment.py", "load(project_root(Path(path)))"),
+            ("scripts/lib/developer_profile.py", "load(project_root(Path(repo_root)))"),
+            ("scripts/lib/handoff.py", "overlay(load_user(), config.operator).context_limit"),
         ),
         "config",
     ),

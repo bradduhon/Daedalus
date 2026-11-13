@@ -22,6 +22,7 @@ from lib import (
     atomic,
     audit_rounds,
     git,
+    handoff,
     manifest,
     operator_file,
     plan_record,
@@ -2304,8 +2305,6 @@ HANDOFF_WRITE_TWICE = (
 
 def _past_limit(repo: Path, state: dict[str, object], agent: str) -> tuple[int, int] | None:
     # 0284: (tokens, limit) when the agent's recorded size is past an active limit, else None.
-    from lib import handoff
-
     tokens = handoff.recorded_tokens(train_state.units(state), agent)
     if tokens is None:
         return None
@@ -2318,8 +2317,6 @@ def _past_limit(repo: Path, state: dict[str, object], agent: str) -> tuple[int, 
 
 def _resume_refusal(repo: Path, state: dict[str, object], unit_id: str, agent: str) -> None:
     # 0284: every resume path of a bound coder meets this one refusal past the limit.
-    from lib import handoff
-
     past = _past_limit(repo, state, agent)
     if past is not None:
         raise RunnerError(
@@ -2357,8 +2354,6 @@ def _handoff_write(
     repo: Path, train_id: str, state: dict[str, object], uid: str, coder: str
 ) -> list[str]:
     # 0284: the one resume of a past-the-limit coder, marked on the unit once per agent.
-    from lib import handoff
-
     unit = _unit_record(state, train_id, uid)
     if _past_limit(repo, state, coder) is None:
         raise RunnerError(HANDOFF_WRITE_UNDER.format(agent=coder))
@@ -2378,8 +2373,6 @@ def _handoff_write(
 
 def _cold_handoff(repo: Path, train_id: str, state: dict[str, object], uid: str) -> str | None:
     # 0284: the hand-off file a new coder starts from; the old coder past the limit needs one.
-    from lib import handoff
-
     name = f"{train_id}-{uid.lower()}"
     unit = next((u for u in train_state.units(state) if u.get("name") == name), None)
     if unit is None:
@@ -2412,8 +2405,6 @@ def _cold_handoff(repo: Path, train_id: str, state: dict[str, object], uid: str)
 
 def _with_handoff(brief: Path, file: str) -> None:
     # 0284: the unit's brief plus one Hand-off line after its Worktree line; a later one replaces.
-    from lib import handoff
-
     rows = [
         row
         for row in brief.read_text(encoding="utf-8").splitlines()
