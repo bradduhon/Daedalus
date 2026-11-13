@@ -282,13 +282,13 @@ def label_of(agent_type: str, prompt: str) -> str | None:
 
 
 def role_label(agent_type: str, unit: str | None, number: int | None = None) -> str:
-    # D5: one name for an agent: its role, then its unit or round, else its start number.
+    # One name for an agent: its role, then its unit or round, else its start number.
     parts = [agent_type.removeprefix(PREFIX), unit or (str(number) if number else None)]
     return " ".join(p for p in parts if p)
 
 
 def agent_labels(session: str, root: Path, records: list[dict[str, object]]) -> dict[str, str]:
-    # D5: agent id to role label for the audit report; a role with no unit numbers by first start.
+    # Agent id to role label for the audit report; a role with no unit numbers by first start.
     try:
         runs, _ = session_runs(session, root, records)
     except (OSError, UnicodeDecodeError):

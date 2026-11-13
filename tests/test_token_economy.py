@@ -588,7 +588,7 @@ def _starts(*pairs: tuple[str, str]) -> list[dict[str, object]]:
 
 
 def test_agent_labels_name_role_and_unit_or_round(home: Path, tmp_path: Path) -> None:
-    # D5: the audit report's agent label is the role plus the unit or round the transcript names.
+    # The audit report's agent label is the role plus the unit or round the transcript names.
     _train(home)
     records = _starts(
         ("orch", "daedalus:orchestrator"), ("coder", "daedalus:coder"), ("aud", "daedalus:auditor")

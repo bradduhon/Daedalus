@@ -350,7 +350,7 @@ def test_stop_with_no_earlier_record_keeps_a_dash_start(marked_data: Path, hook_
 def test_two_agents_of_one_role_are_numbered_by_first_start(
     marked_data: Path, hook_input: Any
 ) -> None:
-    # D5: the id trails only in the timeline; the blocks list and tables use the role label.
+    # The id trails only in the timeline; the blocks list and tables use the role label.
     _subagent(hook_input, "SubagentStart", "a1", "writer")
     _subagent(hook_input, "SubagentStart", "a2", "writer")
     _block(hook_input, "a2", "writer", BLOCK_CURL)

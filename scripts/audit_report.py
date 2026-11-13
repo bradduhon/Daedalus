@@ -137,12 +137,12 @@ def md_escape(value: object, limit: int | None = None) -> str:
 
 
 def _who(rec: dict[str, object], labels: dict[str, str]) -> str:
-    # D5: an agent reads as its role label; a record with no known agent id keeps its type.
+    # An agent reads as its role label; a record with no known agent id keeps its type.
     return labels.get(str(rec.get("agent_id")), str(rec.get("agent_type")))
 
 
 def _timeline(records: list[dict[str, object]], labels: dict[str, str]) -> list[str]:
-    # D5: the raw agent id trails as the grep key.
+    # The raw agent id trails as the grep key.
     # 0114: a start opens a row; a stop closes its id's newest open row, else opens a resume row.
     rows: list[dict[str, object]] = []
     open_rows: dict[str, dict[str, object]] = {}
