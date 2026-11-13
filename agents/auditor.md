@@ -80,7 +80,8 @@ coding model: for each `Unit:` line, read what that unit changed with
 investigation alike, against the definition on every `Work class:` line. Write one line per
 unit to the `Class check file:` path, `<unit> | <planned class> | class ok` or
 `<unit> | <planned class> | <class the change calls for> | <file>:<named part that shows it>`,
-naming only a class a `Work class:` line names. End that reply with
+naming only a class a `Work class:` line names; the named part is a function, a section or a
+line range, never a sentence. End that reply with
 `[STATUS: CLASS_CHECK] path=<that path>` as its first and last line, with no verdict line, no
 section and no findings file. A later round's dispatch carries one `Class raised: <row>` line
 per unit the check raised: put each row in that round's findings list and file it as a
@@ -103,7 +104,8 @@ removed lines (step 1), the fixed class commands of step 2, scope (step 4) and c
 file and the three cells (Finding format items 1 to 4 and 6), and both verdict lines. Skip the
 rank by readers, the reachable scope with its `Reachable:` and `Hunt:` lines, and the
 adversarial corpus run (Finding format item 5); a small change touches no jail check file. The
-short form is one round, round 1. A later round after a fix takes the full procedure.
+short form is one round, round 1. A later round after a fix takes the full procedure on the
+range and places its dispatch names (Later round).
 
 ## Table-diff form (0232)
 When the dispatch carries a `Form: table diff` line, run
@@ -146,9 +148,9 @@ Work through every step for every branch.
    `Over size:` asset file is judged by its name, never its content. A file with a source
    ending is never excluded, so it is in the diff. Each `Asset root source:` line names a
    source file under an asset root: judge its change as usual, and file it as a finding,
-   because an asset root is no place for source. Every round judges the full diff
-   from `<diff base>`; a later round starts at the delta since your last round and never stops
-   there.
+   because an asset root is no place for source. Round 1 judges the full diff
+   from `<diff base>`; a dispatch that carries a `Range:` line reads that range and its `Place:`
+   lines and nothing else (Later round).
    **Reachable scope**: scope is the diff plus what it makes reachable. For each new file,
    flag, subcommand, input source or agent instruction, list the older rules and enforcement
    points it feeds or relies on, each `Reachable:` line included, and judge each at `<tip>` in
@@ -301,3 +303,11 @@ before the closing line.
 - `[STATUS: COMPLIANCE] <control ids with pack ids and refs ids>` as the last line in compliance-question mode only: an answer to a coder's question, not a verdict.
 
 If a call is refused because the context is past its limit, stop the work. Write the hand-off to the path the refusal names with the Write tool, holding what is done, what is left, the files touched, the next step and any open question. Then hand back with the last line `[STATUS: HANDOFF] path=<path>`, nothing after it.
+
+## Later round
+A dispatch that carries a `Range: <sha>..<sha>` line is a round after a rejected one (0278).
+Read that range in place of the full diff of step 1, with `git -C <audit worktree> diff <range>`
+and `git -C <audit worktree> log <range>`, and reread the place of each
+`Place: <place> | rule: <rule>` line, saying in your reply for each whether it is fixed. Read
+nothing else outside the range. A finding goes in the Finding format with its test or `no-test:`
+line and its rule, places and search cells, and in that round's findings list.

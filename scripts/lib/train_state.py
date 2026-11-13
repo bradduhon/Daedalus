@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from pathlib import Path
 
-from lib import atomic, locks
+from lib import atomic, locks, work_classes
 
 # 0024: one state file per train; only scripts write here (the jail refuses tool writes).
 STATE_DIR = Path(".claude") / "daedalus" / "trains"
@@ -28,6 +28,8 @@ PLAN, CHOICES, VERDICT, EXEMPTIONS, PHASE, WEIGHT = (
     "phase",
     "weight",
 )
+# 339: picks {"<round>": {"<finding key>": "fix"|"skip"|"stop"}}; only the main session writes.
+PICKS = "picks"
 APPROVED, REJECTED = "approved", "rejected"
 # 0156, 0182: true once the contract subcommand skipped the plan; lock --no-contract needs it.
 CONTRACT_SKIP = "contract_skip"
@@ -60,6 +62,10 @@ FIX_UNITS = "fix_units"
 CLASS_CHECK = "class_check"
 # 0280: {"model", "class", "unit", "raised_from"}, the audit's model and the unit that set it.
 AUDITOR_MODEL = "auditor_model"
+# 0278: {"<round>": "<model>"}, the model each audit round's new auditor starts on.
+AUDITOR_MODELS = "auditor_models"
+# 0278: {"<round>": ["<place> | rule: <rule>"]}, a rejected round's places from its auditor reply.
+AUDIT_PLACES = "audit_places"
 # 0284: on a unit, {"<agent id>": {"tokens": n} or {"reason": label}} at the agent's last return.
 SIZES = "context_sizes"
 # 0284: on a unit, [{"old", "tokens", "file", "new"}] in order; run-wide for an agent with no unit.
@@ -68,6 +74,24 @@ HANDOFFS = "handoffs"
 COMPLETION = "completion"
 # 0284: on a unit, the agents resumed once for the hand-off write.
 HANDOFF_RESUMES = "handoff_resumes"
+# 0276: {"by": "session" or "agent", "model": a MODEL_RANK word or "unknown", "reason": a code}.
+ORCHESTRATING = "orchestrating"
+BY_SESSION, BY_AGENT, UNKNOWN_MODEL = "session", "agent", "unknown"
+DECIDES, ASKS = "decides", "asks"
+_BY = {BY_SESSION: "by the main session", BY_AGENT: "by the orchestrator agent"}
+# 0276: the only reasons a record or a read gives for unknown; a code outside them is unreadable.
+NO_SESSION_RECORD, AGENT_UNRESOLVED, NO_RECORD, UNREADABLE = (
+    "session-unread",
+    "agent-unresolved",
+    "no-record",
+    "unreadable",
+)
+UNKNOWN_REASONS = {
+    NO_SESSION_RECORD: "no record a script can trust names the main session's model",
+    AGENT_UNRESOLVED: "the orchestrator agent's model could not be resolved",
+    NO_RECORD: "the run began before the orchestrating model was recorded",
+    UNREADABLE: "the run state's record of it is not in a form this version writes",
+}
 
 
 class TrainStateError(RuntimeError):
@@ -393,6 +417,32 @@ def mark_audit(repo: Path, train_id: str, name: str) -> None:
         state["units"] = recorded
 
     change(repo, train_id, edit)
+
+
+def orchestrating(state: dict[str, object]) -> tuple[str, str | None, str | None]:
+    """0276: (model word or unknown, by, reason code); no record or a foreign one is unknown."""
+    if ORCHESTRATING not in state:
+        return UNKNOWN_MODEL, None, NO_RECORD
+    held = record(state, ORCHESTRATING)
+    model, by, reason = held.get("model"), held.get("by"), held.get("reason")
+    known = isinstance(model, str) and model in work_classes.MODEL_RANK and reason is None
+    unknown = model == UNKNOWN_MODEL and isinstance(reason, str) and reason in UNKNOWN_REASONS
+    if not isinstance(by, str) or by not in _BY or not (known or unknown):
+        return UNKNOWN_MODEL, None, UNREADABLE
+    assert isinstance(model, str)
+    return model, by, reason if isinstance(reason, str) else None
+
+
+def judgement(model: str) -> str:
+    # 0276: decides only at the top coding model or higher; unknown and everything below ask.
+    return DECIDES if work_classes.at_or_above_top(model) else ASKS
+
+
+def orchestrating_line(state: dict[str, object], label: str = "orchestrating model") -> str:
+    model, by, reason = orchestrating(state)
+    who = f", {_BY[by]}" if by is not None else ""
+    why = f" ({UNKNOWN_REASONS[reason]})" if reason is not None else ""
+    return f"{label}: {model}{who}{why} | at a judgement call: {judgement(model)}"
 
 
 def active_train(repo: Path) -> str | None:

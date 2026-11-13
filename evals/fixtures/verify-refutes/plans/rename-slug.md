@@ -5,6 +5,7 @@ One unit: the slug helper takes its public name.
 
 ```plan
 unit: U1 | title: rename the slug helper | files: src/slug.py, tests/test_slug.py | base: integration
+provides: none
 graph: units=1 critical_path=1 width=1 overlap_only=none
 ```
 

@@ -45,6 +45,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"providers"}
         # 0265: the run's validate of one unit, after its coder hands it in.
         | {"validate"}
+        # 339: the fix unit after a recorded Fix it now pick; pick itself stays the main session's.
+        | {"fix-unit"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),
