@@ -391,8 +391,8 @@ The train ends with the pull request URLs and a numbered list:
 
 1. Review the pull request.
 2. Check CI on the pull request.
-3. Merge the pull request. You merge; the train never does.
-4. Check that the pull request is merged with `gh pr view <url> --json state`. Then, from your own shell, switch back to your base branch and delete the branch with `git branch -D daedalus/<train-id>`. A squash merge leaves the branch looking unmerged to git, so `git branch -d` would refuse it.
+3. Merge the pull request with a merge commit, so every commit of the run lands on your base branch as written. You merge; the train never does.
+4. Check that the pull request is merged with `gh pr view <url> --json state`. Then, from your own shell, run `git fetch origin <base branch>` and `git merge-base --is-ancestor daedalus/<train-id> origin/<base branch>`. Exit 0 means every commit of the run is on your base branch. A non-zero exit means the pull request was not merged with a merge commit, and Daedalus expects one. Then switch back to your base branch and delete the branch with `git branch -D daedalus/<train-id>`. Your local base branch may not hold the merge until you pull it, so `git branch -d` can refuse a merged branch.
 5. Run `/daedalus:audit-report <session>` to read this session's audit log.
 
 With a Charter branch, item 6 covers the Charter pull request. You review and merge it after the code pull request and check it is merged the same way. The item's last step switches the Charter back and deletes its branch with `git branch -D`. The list ends with a note that a later Daedalus release adds the Execution Train readiness checklist: the manual drills and boundary checks before production.

@@ -1473,7 +1473,7 @@ _SUMMARY = _Source("the train summary", "the summary")
 
 
 def _release_train(repo: Path, merge_sha: str) -> str:
-    # 0068: the squash-merge subject names the train; otherwise the active or newest train.
+    # 0068, 0282: the merge commit subject names the train branch; else the active or newest train.
     shown = (
         _run(repo, "log", "-1", "--format=%s", f"{merge_sha}^{{commit}}", "--")
         if _SHA.fullmatch(merge_sha)
@@ -1509,6 +1509,35 @@ def _merge_commit(repo: Path, merge_sha: str, base: str) -> str:
         if known and _run(repo, "merge-base", "--is-ancestor", sha, ref).returncode == 0:
             return sha
     raise WorkspaceError(off)
+
+
+def _run_on_base(repo: Path, train_id: str, state: dict[str, object], sha: str, base: str) -> None:
+    # 0279, 0282: each recorded tip must be an ancestor of the merge; a squash or rebase fails.
+    tips = [
+        tip
+        for key in (train_state.VERDICT, train_state.DOCS_VERDICT)
+        if isinstance(tip := train_state.record(state, key).get("tip"), str) and _SHA.fullmatch(tip)
+    ]
+    if not tips:
+        raise WorkspaceError(
+            f"train {train_id} records no audited tip, so this step cannot tell whether its "
+            f"commits are on {base}. Next: run the release step only for a run whose push "
+            "recorded an audit verdict."
+        )
+    for tip in tips:
+        if _run(repo, "merge-base", "--is-ancestor", tip, sha).returncode != 0:
+            raise WorkspaceError(
+                f"the run's commits are not on {base}: its recorded tip {tip[:12]} is not an "
+                f"ancestor of merge sha {sha[:12]}. Daedalus expects the pull request merged "
+                "with a merge commit, which keeps every commit of the run as written; a squash or "
+                "rebase merge keeps none of them. This step reads git alone, so it cannot tell a "
+                "squashed or rebased pull request from a sha that is not this run's merge. "
+                f"Next: rerun with the sha of the merge commit on {base} that has {tip[:12]} as "
+                "a parent; when the pull request was squashed or rebased there is no such commit, "
+                "so release this one by the plain path, daedalus_workspace.py release "
+                "--merge-sha <sha> --notes-file <pull request body file>, and allow merge commits "
+                "only in the repository settings before the next run."
+            )
 
 
 def _version_at(repo: Path, sha: str) -> str | None:
@@ -1699,8 +1728,9 @@ def release(
             "pull request. Next: run the release step only after a Push Train pull request merges."
         )
     sha = _merge_commit(repo, merge_sha, state_base)
+    _run_on_base(repo, train_id, state, sha, state_base)
     version = _merged_version(repo, sha)
-    # issue 47: the squash commit's first parent is the pull request base, even when main moved.
+    # issue 47: the merge commit's first parent is the pull request base, even when main moved.
     before = _version_at(repo, f"{sha}^1")
     if before == version:
         # issue 47: an unchanged VERSION is a skip recorded in state, never a refusal.
