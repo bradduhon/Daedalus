@@ -28,6 +28,8 @@ PLAN, CHOICES, VERDICT, EXEMPTIONS, PHASE, WEIGHT = (
     "phase",
     "weight",
 )
+# 339: picks {"<round>": {"<finding key>": "fix"|"skip"|"stop"}}; only the main session writes.
+PICKS = "picks"
 APPROVED, REJECTED = "approved", "rejected"
 # 0156, 0182: true once the contract subcommand skipped the plan; lock --no-contract needs it.
 CONTRACT_SKIP = "contract_skip"
