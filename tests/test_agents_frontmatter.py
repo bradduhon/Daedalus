@@ -608,7 +608,7 @@ def test_auditor_judges_what_a_change_makes_reachable() -> None:
         "Reachability pass, before round 1",
         "`Hunt: can <attacker input> reach <protected thing> after <unit>?`",
         "never mark a lead optional or the auditor's to drop",
-        "A later round judges the full diff from `<base sha>` again",
+        "A later round reads that range and rereads each place, and nothing else",
     ):
         assert phrase in recipe, phrase
 
@@ -767,7 +767,9 @@ CLASS_CHECK = "[STATUS: CLASS_CHECK] path=<path>"
 
 def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
     # pin C1 -> C3: first and last line `[VERDICT: <word>] tip=<40 lowercase hex>`.
+    # 0278: the later round section follows the contract at the end of the file.
     contract = AUDITOR.read_text().split("## Status contract\n", 1)[1]
+    contract = contract.split("\n## Later round\n", 1)[0]
     tip = "tip=<40 lowercase hex>"
     assert contract == (
         "Your reply starts with exactly one of these verdict lines as its first line and ends with"

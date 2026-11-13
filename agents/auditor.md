@@ -301,3 +301,11 @@ before the closing line.
 - `[STATUS: COMPLIANCE] <control ids with pack ids and refs ids>` as the last line in compliance-question mode only: an answer to a coder's question, not a verdict.
 
 If a call is refused because the context is past its limit, stop the work. Write the hand-off to the path the refusal names with the Write tool, holding what is done, what is left, the files touched, the next step and any open question. Then hand back with the last line `[STATUS: HANDOFF] path=<path>`, nothing after it.
+
+## Later round
+A dispatch that carries a `Range: <sha>..<sha>` line is a round after a rejected one (0278).
+Read that range in place of the full diff of step 1, with `git -C <audit worktree> diff <range>`
+and `git -C <audit worktree> log <range>`, and reread the place of each
+`Place: <place> | rule: <rule>` line, saying in your reply for each whether it is fixed. Read
+nothing else outside the range. A finding goes in the Finding format with its test or `no-test:`
+line and its rule, places and search cells, and in that round's findings list.

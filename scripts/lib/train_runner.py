@@ -14,7 +14,7 @@ import re
 import shlex
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
@@ -35,6 +35,7 @@ from lib import (
 from lib.audit import DataDirError, ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
+    HANDBACK,
     R_BOTH_VERDICTS,
     REFUTED_PREFIX,
     SUMMARY_DIR,
@@ -48,6 +49,7 @@ from lib.audit_proof import (
     docs_findings_path,
     docs_keys,
     findings_path,
+    handback_message,
     hooks_live,
     ledger_parent,
     live_log,
@@ -57,6 +59,7 @@ from lib.audit_proof import (
     read_findings,
     round_keys,
     round_verdict,
+    stop_verdict,
     tip_admits,
     tip_problem,
     verdict_tip,
@@ -1667,6 +1670,7 @@ def auditor_model(cwd: Path) -> Outcome:
         state = train_state.load(repo, train_id)
         merged = _audit_units(repo, train_id, state, operator)
         check, checked = _class_check(repo, train_id, state, merged, operator)
+        later = _later_audit_lines(repo, train_id, state)
         held = {n for n, _ in operator.work_classes}
         # (unit, class, line tail, planned class when the class check raised it)
         rows: list[tuple[str, str, str, str | None]] = []
@@ -1690,11 +1694,16 @@ def auditor_model(cwd: Path) -> Outcome:
         model = work_classes.model_for(cls, operator)
         entry: dict[str, object] = {"model": model, "class": cls, "unit": top}
         entry["raised_from"] = was_top
-        fields: dict[str, object] = {train_state.AUDITOR_MODEL: entry}
+        # 0278: every round is a new auditor, so each round keeps the model it starts on.
+        models = train_state.record(state, train_state.AUDITOR_MODELS)
+        fields: dict[str, object] = {
+            train_state.AUDITOR_MODEL: entry,
+            train_state.AUDITOR_MODELS: {**models, str(derived_round(state)): model},
+        }
         if check:
             fields[train_state.CLASS_CHECK] = check
         train_state.update(repo, train_id, **fields)
-        return [model, f"auditor {top}: {model} | class: {cls}{tail}", *checked]
+        return [model, f"auditor {top}: {model} | class: {cls}{tail}", *checked, *later]
 
     return _recorded(cwd, edit)
 
@@ -2021,6 +2030,62 @@ def round_lines(cwd: Path, unit_id: str, tip: str) -> Outcome:
             raise RunnerError(str(exc)) from exc
 
     return _with_next(_recorded(cwd, edit), "assets")
+
+
+def _reply_places(turn: list[Mapping[str, object]]) -> list[str]:
+    # 0278, 0281: `<place> | rule: <rule>` per place of the rejecting reply's finding lines.
+    rejecting = [r for r in turn if stop_verdict(r) == VERDICT_REJECTED]
+    handed = [r for r in rejecting if r.get("tool_name") == HANDBACK]
+    record: Mapping[str, object] = (handed or rejecting or [{}])[-1]
+    if record.get("tool_name") == HANDBACK:
+        raw = handback_message(record)
+        texts = [raw] if isinstance(raw, str) else []
+    else:
+        fields = (record.get("last_message_head"), record.get("last_message_tail"))
+        texts = [t for t in fields if isinstance(t, str)]
+    out: list[str] = []
+    for text in texts:
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        body = lines[1:-1]
+        body = body[: body.index("## Compliance")] if "## Compliance" in body else body
+        for row in (ln.removeprefix("- ") for ln in body if audit_rounds.reply_finding(ln)):
+            cells = audit_rounds.finding_cells(row)
+            rule = cells.get("rule", "")
+            for place in cells.get("places", "").split(audit_rounds.PLACE_SEP):
+                line = f"{place.strip()} | rule: {rule}"
+                if rule and place.strip() and line not in out:
+                    out.append(line)
+    return out
+
+
+def _later_audit_lines(repo: Path, train_id: str, state: dict[str, object]) -> list[str]:
+    # 0278: after a rejected round, the next auditor reads the fix's range and each place only.
+    verdict = train_state.record(state, train_state.VERDICT)
+    places = train_state.record(state, train_state.AUDIT_PLACES).get(str(verdict.get("round")))
+    judged = verdict.get("tip")
+    if verdict.get("status") != train_state.REJECTED or not isinstance(places, list):
+        return []
+    if not isinstance(judged, str) or TIP.fullmatch(judged) is None:
+        return []
+    now = _integration_tip(repo, train_id)
+    round_ = _int(verdict, "round", 0)
+    if judged == now:
+        raise RunnerError(
+            f"daedalus/{train_id} has no commit since round {round_} judged its tip "
+            f"{judged[:12]}, so the next round has nothing to read. Next: merge the fix units "
+            "with finish-unit, then rerun model."
+        )
+    try:
+        done = workspace._run(repo, "merge-base", "--is-ancestor", judged, now)
+    except workspace.WorkspaceError as exc:
+        raise RunnerError(str(exc)) from exc
+    if done.returncode != 0:
+        raise RunnerError(
+            f"the tip {judged[:12]} round {round_} judged is not an ancestor of daedalus/"
+            f"{train_id} at {now[:12]}, so the branch was rewritten. Next: stop the run with "
+            "this line as the reason; the operator decides how the run is audited again."
+        )
+    return [f"{RANGE_PREFIX}{judged}..{now}", *(f"{PLACE_PREFIX}{p}" for p in places)]
 
 
 # 0230: the build step 4 class list; a folder entry ends in a slash.
@@ -3461,7 +3526,9 @@ def record_ledger(cwd: Path, sha: str, ids: str) -> Outcome:
     return _recorded(cwd, edit)
 
 
-def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> tuple[int, str | None]:
+def _auditor_seq(
+    repo: Path, train_id: str, status: str, seq: int | None
+) -> tuple[int, str | None, list[str]]:
     # 0089: the verdict is read from this session's auditor reply records, never from the caller.
     try:
         log, _ = live_log(repo, VERDICT_NEEDLE)
@@ -3505,7 +3572,7 @@ def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> tup
             f"{problem}. Next: run the security audit; the verdict is recorded from the "
             "auditor's reply, never typed."
         )
-    return found, verdict_tip(turn, found)
+    return found, verdict_tip(turn, found), _reply_places(turn)
 
 
 def derived_round(state: dict[str, object]) -> int:
@@ -3618,7 +3685,7 @@ def record_verdict(
         listed = _round_findings(repo, train_id, status, round_, findings) if findings else None
         _class_check_owed(repo, train_id, state)
         _class_rows_listed(repo, train_id, state, round_, listed)
-        found, named = _auditor_seq(repo, train_id, status, seq)
+        found, named, places = _auditor_seq(repo, train_id, status, seq)
         current = _integration_tip(repo, train_id)
         if tip is not None:
             if named != tip:
@@ -3642,6 +3709,10 @@ def record_verdict(
             # 73: the recovery round's auditor consult closes with its verdict.
             if train_state.record(state, REAUDIT):
                 _close_consult(state, AUDITOR_AGENT)
+            if status == train_state.REJECTED:
+                # 0278: the next round's Place: lines, read back by model --agent auditor.
+                held = train_state.record(state, train_state.AUDIT_PLACES)
+                state[train_state.AUDIT_PLACES] = {**held, str(round_): places}
             rounds = train_state.record(state, train_state.AUDIT_ROUNDS)
             # 67: an approval without a list records an empty round, so the next round derives.
             if listed is None:
