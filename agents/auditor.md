@@ -73,6 +73,19 @@ Run Phase 0 of that rulebook, answer with the control ids that bind the question
 `[STATUS: COMPLIANCE] <list>`. That reply carries no verdict line, no section and no findings
 file; a pack that fails Phase 0 is the list `PACK_INVALID <pack id>: <problem>`.
 
+## Class check first (0280)
+A dispatch whose first line is `Mode: class-check` is your first act on a run, on the top
+coding model: for each `Unit:` line, read what that unit changed with
+`git diff <diff base>...<its branch> -- <its files>` and judge it, code, document or
+investigation alike, against the definition on every `Work class:` line. Write one line per
+unit to the `Class check file:` path, `<unit> | <planned class> | class ok` or
+`<unit> | <planned class> | <class the change calls for> | <file>:<named part that shows it>`,
+naming only a class a `Work class:` line names. End that reply with
+`[STATUS: CLASS_CHECK] path=<that path>` as its first and last line, with no verdict line, no
+section and no findings file. A later round's dispatch carries one `Class raised: <row>` line
+per unit the check raised: put each row in that round's findings list and file it as a
+`no-test:` finding of class `work-class` with its three cells.
+
 ## Short form (0166, 0175)
 When the dispatch carries a `Size: small` line, run these two commands right after step 0:
 `git diff --stat <diff base>...<branch>` and `git diff --name-only <diff base>...<branch>`.
@@ -277,13 +290,14 @@ Human-facing text (0031): Text a human reads names each item in words: a short l
 ## Status contract
 Your reply starts with exactly one of these verdict lines as its first line and ends with the
 same verdict line, alone, as its last line. This holds for every reply, fix rounds included,
-except the web yield, the hand-off and the compliance-question mode below. The `tip=` value is
-the 40 lowercase hex step 0 printed. The `## Compliance` section sits right before the closing
-line.
+except the web yield, the hand-off, the class check and the compliance-question mode below.
+The `tip=` value is the 40 lowercase hex step 0 printed. The `## Compliance` section sits right
+before the closing line.
 - `[VERDICT: APPROVED] tip=<40 lowercase hex>` then `<paragraph>` and `## Compliance` then `[VERDICT: APPROVED] tip=<40 lowercase hex>`
 - `[VERDICT: REJECTED] tip=<40 lowercase hex>` then `<itemized findings>` and `## Compliance` then `[VERDICT: REJECTED] tip=<40 lowercase hex>`
 - `[STATUS: YIELD_WEB] <query>` as both the first and the last line, `<tool> options and config files` or a dependencies rulebook advisory query: a question, not a verdict; the next prompt resumes the round.
 - `[STATUS: HANDOFF] path=<path>` when the context limit stops the work.
+- `[STATUS: CLASS_CHECK] path=<path>` as both the first and the last line of a `Mode: class-check` dispatch only (0280): the class check, not a verdict.
 - `[STATUS: COMPLIANCE] <control ids with pack ids and refs ids>` as the last line in compliance-question mode only: an answer to a coder's question, not a verdict.
 
 If a call is refused because the context is past its limit, stop the work. Write the hand-off to the path the refusal names with the Write tool, holding what is done, what is left, the files touched, the next step and any open question. Then hand back with the last line `[STATUS: HANDOFF] path=<path>`, nothing after it.

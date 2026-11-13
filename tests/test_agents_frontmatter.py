@@ -761,6 +761,8 @@ YIELD = "[STATUS: YIELD_WEB] <query>"
 ANSWER = "[STATUS: COMPLIANCE] <control ids with pack ids and refs ids>"
 # 0284: the hand-off line of an agent that holds the Write tool.
 HANDOFF = "[STATUS: HANDOFF] path=<path>"
+# 0280: the class check's reply, its own dispatch before round 1.
+CLASS_CHECK = "[STATUS: CLASS_CHECK] path=<path>"
 
 
 def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
@@ -770,9 +772,9 @@ def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
     assert contract == (
         "Your reply starts with exactly one of these verdict lines as its first line and ends with"
         " the\nsame verdict line, alone, as its last line. This holds for every reply, fix rounds"
-        " included,\nexcept the web yield, the hand-off and the compliance-question mode below."
-        " The `tip=` value is\nthe 40 lowercase hex step 0 printed. The `## Compliance` section"
-        " sits right before the closing\nline.\n"
+        " included,\nexcept the web yield, the hand-off, the class check and the"
+        " compliance-question mode below.\nThe `tip=` value is the 40 lowercase hex step 0"
+        " printed. The `## Compliance` section sits right\nbefore the closing line.\n"
         f"- `[VERDICT: APPROVED] {tip}` then `<paragraph>` and `## Compliance`"
         f" then `[VERDICT: APPROVED] {tip}`\n"
         f"- `[VERDICT: REJECTED] {tip}` then `<itemized findings>` and `## Compliance`"
@@ -781,6 +783,8 @@ def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
         " dependencies rulebook advisory query: a question, not a verdict; the next prompt resumes"
         " the round.\n"
         f"- `{HANDOFF}` when the context limit stops the work.\n"
+        f"- `{CLASS_CHECK}` as both the first and the last line of a `Mode: class-check` dispatch"
+        " only (0280): the class check, not a verdict.\n"
         f"- `{ANSWER}` as the last line in compliance-question mode only: an answer to a coder's"
         " question, not a verdict.\n"
         "\nIf a call is refused because the context is past its limit, stop the work. Write the"
@@ -793,6 +797,7 @@ def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
         f"[VERDICT: REJECTED] {tip}",
         YIELD,
         HANDOFF,
+        CLASS_CHECK,
         ANSWER,
     )
 

@@ -782,6 +782,7 @@ def _audit(
         lines.append(f"{VERDICT_REJECTED} tip={tip} after {last} round(s).")
     else:
         lines.append("Verdict: pending")
+    lines += _audit_model(state, repo, charter)
     for number in range(1, top + 1):
         entry = rounds.get(str(number))
         if isinstance(entry, dict) and entry:
@@ -797,6 +798,40 @@ def _audit(
         else:
             lines.append(f"Round {number}: not recorded in the run state")
     return lines + _docs(state, repo, charter)
+
+
+_PICKED_KEYS = ("model", "class", "unit")
+_RAISED_KEYS = ("planned", "class")
+
+
+def _audit_model(state: dict[str, object], repo: Path, charter: Path | None) -> list[str]:
+    # 0280: the auditor's model, the class and unit that set it, and each unit the check raised.
+    picked = train_state.record(state, train_state.AUDITOR_MODEL)
+    check = train_state.record(state, train_state.CLASS_CHECK)
+    where = "the train state auditor model"
+    lines: list[str] = []
+    if picked:
+        model, cls, unit = (_cell(_text(picked, k), repo, charter, where) for k in _PICKED_KEYS)
+        line = f"Auditor model: {model}, from unit {unit} of class {cls}"
+        was = _text(picked, "raised_from")
+        if was:
+            line += f", raised by the class check from {_cell(was, repo, charter, where)}"
+        lines.append(line)
+    if not check:
+        return lines
+    units = _obj(check, "units")
+    raised = [uid for uid in sorted(units) if _obj(units, uid).get("raised") is True]
+    if not raised:
+        lines.append(f"Class check: no unit raised ({len(units)} checked)")
+    where = "the train state class check"
+    for uid in raised:
+        entry = _obj(units, uid)
+        cells = (
+            _cell(v, repo, charter, where) for v in (uid, *(_text(entry, k) for k in _RAISED_KEYS))
+        )
+        name, planned, checked = cells
+        lines.append(f"Class check raised {name} from {planned} to {checked}")
+    return lines
 
 
 def _docs(state: dict[str, object], repo: Path, charter: Path | None) -> list[str]:
